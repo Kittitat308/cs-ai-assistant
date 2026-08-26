@@ -1,0 +1,89 @@
+# ==========================================
+# Environment variables / Secrets
+# ==========================================
+
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# ==========================================
+# Python
+# ==========================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+backend/.venv/
+backend/venv/
+
+.pytest_cache/
+.mypy_cache/
+
+# ==========================================
+# Python build
+# ==========================================
+
+build/
+dist/
+*.egg-info/
+
+# ==========================================
+# InsightFace downloaded models
+# ==========================================
+
+.insightface/
+backend/.insightface/
+backend/models_cache/
+
+# ==========================================
+# Temporary audio / images
+# ==========================================
+
+*.wav
+*.mp3
+*.webm
+
+backend/temp/
+backend/uploads/
+
+# ==========================================
+# Node / Next.js
+# ==========================================
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ==========================================
+# IDE
+# ==========================================
+
+.vscode/
+.idea/
+
+# ==========================================
+# Operating System
+# ==========================================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# Logs
+# ==========================================
+
+*.log
+logs/
+
+# ==========================================
+# Local Git metadata backups
+# ==========================================
+
+.git-backups/

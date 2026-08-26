@@ -1,0 +1,19 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+pydantic-settings
+
+sqlalchemy
+psycopg[binary]
+
+groq
+google-genai
+edge-tts
+
+insightface
+# ค่าเริ่มต้นใช้ได้กับทุกเครื่อง; หากมี NVIDIA CUDA
+# สามารถเปลี่ยนเป็น onnxruntime-gpu ได้ภายหลัง
+onnxruntime
+opencv-python-headless
+numpy
