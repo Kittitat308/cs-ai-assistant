@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.face import FaceEmbedding
+from app.models.room import Room
 from app.models.schedule import ClassSchedule
 from app.models.user import User
 from app.services.face_service import face_service
@@ -84,8 +85,16 @@ def parse_schedules(raw_schedules: str) -> list[dict]:
             start_value = str(meeting.get("start_time", ""))
             end_value = str(meeting.get("end_time", ""))
 
+            try:
+                room_id = int(meeting.get("room_id", 0))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "กรุณาเลือกห้องเรียนให้ครบ")
+
             if day_of_week not in ALLOWED_DAYS:
                 raise HTTPException(400, "กรุณาเลือกวันเรียนให้ครบ")
+
+            if room_id < 1:
+                raise HTTPException(400, "กรุณาเลือกห้องเรียนให้ครบ")
 
             try:
                 start_time = time.fromisoformat(start_value)
@@ -102,6 +111,7 @@ def parse_schedules(raw_schedules: str) -> list[dict]:
                     "subject_name": subject_name,
                     "group_number": group_number,
                     "meeting_index": meeting_index,
+                    "room_id": room_id,
                     "day_of_week": day_of_week,
                     "start_time": start_time,
                     "end_time": end_time,
@@ -160,6 +170,24 @@ async def register_user(
         clean_external_id = None
 
     parsed_schedules = parse_schedules(schedules)
+
+    selected_room_ids = {
+        schedule["room_id"]
+        for schedule in parsed_schedules
+    }
+
+    if selected_room_ids:
+        existing_room_ids = {
+            room_id
+            for (room_id,) in (
+                db.query(Room.id)
+                .filter(Room.id.in_(selected_room_ids))
+                .all()
+            )
+        }
+
+        if existing_room_ids != selected_room_ids:
+            raise HTTPException(400, "ห้องเรียนที่เลือกไม่มีอยู่ในระบบ")
 
     existing = None
 

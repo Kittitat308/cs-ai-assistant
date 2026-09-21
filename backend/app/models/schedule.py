@@ -22,6 +22,12 @@ class ClassSchedule(Base):
         index=True,
     )
 
+    room_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     subject_name: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -60,4 +66,9 @@ class ClassSchedule(Base):
     user = relationship(
         "User",
         back_populates="class_schedules",
+    )
+
+    room = relationship(
+        "Room",
+        back_populates="schedules",
     )

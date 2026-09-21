@@ -36,6 +36,7 @@ class STTService:
                 ),
                 model=settings.groq_stt_model,
 
+                language="th",
                 # json ทำให้เราต้องการเพียง transcription
                 response_format="json",
 

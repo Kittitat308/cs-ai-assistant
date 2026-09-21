@@ -81,7 +81,11 @@ async def recognize_face(
 
     if user is None:
 
-        if chat_session is None:
+        # ห้าม guest คนใหม่ใช้ session ของผู้ใช้ที่ยืนยันตัวตนแล้ว
+        if (
+            chat_session is None
+            or chat_session.user_id is not None
+        ):
             chat_session = ChatSession(
                 user_id=None,
             )

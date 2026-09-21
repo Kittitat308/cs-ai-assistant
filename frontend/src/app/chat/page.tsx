@@ -20,6 +20,7 @@ type ChatMessage = {
 
 
 type RecognizedUser = {
+  id: number;
   name: string;
   role: string;
 };
@@ -32,24 +33,6 @@ type RecognizedUser = {
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL
   ?? "http://localhost:8000";
-
-
-/*
- * Voice Activity Detection แบบง่าย
- *
- * ค่า RMS มากกว่านี้ถือว่าผู้ใช้กำลังพูด
- *
- * ภายหลังสามารถปรับ threshold
- * ให้เหมาะกับไมโครโฟนจริง
- */
-const VOICE_THRESHOLD = 0.035;
-
-
-/*
- * เมื่อเสียงเงียบต่อเนื่องเกินเวลานี้
- * จะถือว่าผู้ใช้พูดจบ
- */
-const SILENCE_TIME_MS = 900;
 
 
 /* =========================================
@@ -85,28 +68,24 @@ export default function Home() {
   const mediaRecorderRef =
     useRef<MediaRecorder | null>(null);
 
+  const activeAudioRef =
+    useRef<HTMLAudioElement | null>(null);
 
-  /* ---------------------------------------
-     Audio/VAD
-  --------------------------------------- */
-
-  const audioContextRef =
-    useRef<AudioContext | null>(null);
-
-  const analyserRef =
-    useRef<AnalyserNode | null>(null);
-
-  const vadTimerRef =
-    useRef<number | null>(null);
 
   const audioChunksRef =
     useRef<Blob[]>([]);
 
-  const silenceStartedRef =
-    useRef<number | null>(null);
-
   const isRecordingRef =
     useRef(false);
+
+  const startingMicrophoneRef =
+    useRef(false);
+
+  const pushToTalkHeldRef =
+    useRef(false);
+
+  const recordingSessionTokenRef =
+    useRef<string | null>(null);
 
   const processingRef =
     useRef(false);
@@ -276,6 +255,28 @@ export default function Home() {
      Face Recognition
   ========================================= */
 
+  function switchSessionToken(
+    nextToken: string,
+  ) {
+    const previousToken =
+      sessionTokenRef.current;
+
+    if (
+      previousToken
+      && previousToken !== nextToken
+    ) {
+      stopRecording();
+      activeAudioRef.current?.pause();
+      setMessages([]);
+      setClaimedName(null);
+      processingRef.current = false;
+      setProcessing(false);
+    }
+
+    sessionTokenRef.current =
+      nextToken;
+  }
+
   async function recognizeFace() {
 
     /*
@@ -343,9 +344,9 @@ export default function Home() {
        * เก็บ backend session token
        */
       if (data.session_token) {
-
-        sessionTokenRef.current =
-          data.session_token;
+        switchSessionToken(
+          data.session_token,
+        );
       }
 
 
@@ -358,6 +359,7 @@ export default function Home() {
         setClaimedName(null);
 
         setRecognizedUser({
+          id: data.user_id,
           name: data.name,
           role: data.role,
         });
@@ -368,16 +370,6 @@ export default function Home() {
             data.similarity * 100
           )}%)`
         );
-
-
-        /*
-         * หลังรู้ว่าใครแล้ว
-         * เริ่มเปิดระบบไมโครโฟน
-         */
-        if (!microphoneStreamRef.current) {
-
-          await startVoiceDetection();
-        }
 
 
         return;
@@ -401,15 +393,6 @@ export default function Home() {
             ? "จำชื่อจากบทสนทนาแล้ว แต่ยังไม่ยืนยันใบหน้า"
             : "ไม่รู้จักผู้ใช้นี้"
         );
-
-
-        /*
-         * Guest ก็สามารถคุยกับ AI ได้
-         */
-        if (!microphoneStreamRef.current) {
-
-          await startVoiceDetection();
-        }
 
 
         return;
@@ -460,264 +443,112 @@ export default function Home() {
 
 
   /* =========================================
-     Microphone + Voice Activity Detection
+     Push-to-talk microphone
   ========================================= */
 
-  async function startVoiceDetection() {
+  async function preparePushToTalk() {
+    const requestedSessionToken =
+      sessionTokenRef.current;
+
+    if (
+      startingMicrophoneRef.current
+      || isRecordingRef.current
+      || processingRef.current
+      || !requestedSessionToken
+    ) {
+      return;
+    }
+
+    startingMicrophoneRef.current = true;
 
     try {
-
       const stream =
         await navigator.mediaDevices.getUserMedia({
           audio: true,
           video: false,
         });
 
-
-      microphoneStreamRef.current =
-        stream;
-
-
-      const AudioContextClass =
-        window.AudioContext;
-
-
-      const audioContext =
-        new AudioContextClass();
-
-
-      audioContextRef.current =
-        audioContext;
-
-
-      const source =
-        audioContext.createMediaStreamSource(
-          stream
+      if (
+        !pushToTalkHeldRef.current
+        || sessionTokenRef.current
+          !== requestedSessionToken
+      ) {
+        stream.getTracks().forEach(
+          (track) => track.stop(),
         );
+        return;
+      }
 
+      microphoneStreamRef.current = stream;
 
-      const analyser =
-        audioContext.createAnalyser();
-
-
-      analyser.fftSize = 2048;
-
-
-      source.connect(
-        analyser
+      const recorder = new MediaRecorder(
+        stream,
+        {
+          mimeType: "audio/webm;codecs=opus",
+        },
       );
 
+      mediaRecorderRef.current = recorder;
+      recordingSessionTokenRef.current =
+        requestedSessionToken;
 
-      analyserRef.current =
-        analyser;
-
-
-      /*
-       * MediaRecorder จะสร้าง WEBM/Opus
-       *
-       * Groq รองรับ WEBM โดยตรง
-       */
-      const recorder =
-        new MediaRecorder(
-          stream,
-          {
-            mimeType:
-              "audio/webm;codecs=opus",
-          }
-        );
-
-
-      mediaRecorderRef.current =
-        recorder;
-
-
-      recorder.ondataavailable =
-        (event) => {
-
-          if (event.data.size > 0) {
-
-            audioChunksRef.current.push(
-              event.data
-            );
-          }
-        };
-
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
 
       recorder.onstop = async () => {
+        const recordedSessionToken =
+          recordingSessionTokenRef.current;
 
-        isRecordingRef.current =
-          false;
-
+        isRecordingRef.current = false;
         setListening(false);
+        microphoneStreamRef.current
+          ?.getTracks()
+          .forEach((track) => track.stop());
+        microphoneStreamRef.current = null;
+        mediaRecorderRef.current = null;
 
+        const audioBlob = new Blob(
+          audioChunksRef.current,
+          { type: "audio/webm" },
+        );
+        audioChunksRef.current = [];
 
-        const audioBlob =
-          new Blob(
-            audioChunksRef.current,
-            {
-              type: "audio/webm",
-            }
-          );
-
-
-        audioChunksRef.current =
-          [];
-
-
-        /*
-         * ป้องกันไฟล์เสียงสั้น/ว่างเกินไป
-         */
-        if (audioBlob.size > 1500) {
-
+        if (
+          audioBlob.size > 500
+          && recordedSessionToken
+          && recordedSessionToken
+            === sessionTokenRef.current
+        ) {
           await sendVoice(
-            audioBlob
+            audioBlob,
+            recordedSessionToken,
           );
         }
       };
 
-
-      /*
-       * เริ่ม loop ตรวจระดับเสียง
-       */
-      vadTimerRef.current =
-        window.requestAnimationFrame(
-          detectVoice
+      if (pushToTalkHeldRef.current) {
+        startRecording();
+      } else {
+        stream.getTracks().forEach(
+          (track) => track.stop(),
         );
-
+        microphoneStreamRef.current = null;
+        mediaRecorderRef.current = null;
+      }
     } catch (error) {
-
       console.error(
         "Microphone error:",
-        error
+        error,
       );
-    }
-  }
-
-
-  /* =========================================
-     Voice detector loop
-  ========================================= */
-
-  function detectVoice(
-    frameTime: number
-  ) {
-
-    const analyser =
-      analyserRef.current;
-
-
-    if (!analyser) {
-      return;
-    }
-
-
-    const data =
-      new Uint8Array(
-        analyser.fftSize
+      setFaceStatus(
+        "ไม่สามารถเปิดไมโครโฟนได้",
       );
-
-
-    analyser.getByteTimeDomainData(
-      data
-    );
-
-
-    /*
-     * คำนวณ RMS volume
-     */
-    let sumSquares = 0;
-
-
-    for (
-      let i = 0;
-      i < data.length;
-      i++
-    ) {
-
-      const normalized =
-        (data[i] - 128) / 128;
-
-
-      sumSquares +=
-        normalized * normalized;
+    } finally {
+      startingMicrophoneRef.current = false;
     }
-
-
-    const rms =
-      Math.sqrt(
-        sumSquares / data.length
-      );
-
-
-    const hasVoice =
-      rms > VOICE_THRESHOLD;
-
-
-    /* ---------------------------------------
-       เริ่มพูด
-    --------------------------------------- */
-
-    if (
-      hasVoice
-      && !isRecordingRef.current
-      && !processingRef.current
-      && sessionTokenRef.current
-    ) {
-
-      startRecording();
-    }
-
-
-    /* ---------------------------------------
-       กำลังอัด
-    --------------------------------------- */
-
-    if (isRecordingRef.current) {
-
-      if (hasVoice) {
-
-        silenceStartedRef.current =
-          null;
-
-      } else {
-
-        /*
-         * เริ่มจับเวลาความเงียบ
-         */
-        if (
-          silenceStartedRef.current
-          === null
-        ) {
-
-          silenceStartedRef.current =
-            frameTime;
-        }
-
-
-        const silenceDuration =
-          frameTime
-          - silenceStartedRef.current;
-
-
-        /*
-         * เงียบประมาณ 900 ms
-         * ถือว่าพูดจบ
-         */
-        if (
-          silenceDuration
-          >= SILENCE_TIME_MS
-        ) {
-
-          stopRecording();
-        }
-      }
-    }
-
-
-    vadTimerRef.current =
-      window.requestAnimationFrame(
-        detectVoice
-      );
   }
 
 
@@ -746,10 +577,6 @@ export default function Home() {
 
     audioChunksRef.current =
       [];
-
-
-    silenceStartedRef.current =
-      null;
 
 
     isRecordingRef.current =
@@ -791,10 +618,15 @@ export default function Home() {
   ========================================= */
 
   async function sendVoice(
-    audioBlob: Blob
+    audioBlob: Blob,
+    requestSessionToken: string,
   ) {
 
-    if (!sessionTokenRef.current) {
+    if (
+      !sessionTokenRef.current
+      || sessionTokenRef.current
+        !== requestSessionToken
+    ) {
       return;
     }
 
@@ -813,7 +645,7 @@ export default function Home() {
 
       formData.append(
         "session_token",
-        sessionTokenRef.current,
+        requestSessionToken,
       );
 
 
@@ -850,6 +682,13 @@ export default function Home() {
 
       const data =
         await response.json();
+
+      if (
+        sessionTokenRef.current
+        !== requestSessionToken
+      ) {
+        return;
+      }
 
       if (data.claimed_name) {
         setClaimedName(
@@ -896,11 +735,15 @@ export default function Home() {
       );
 
     } finally {
+      if (
+        sessionTokenRef.current
+        === requestSessionToken
+      ) {
+        processingRef.current =
+          false;
 
-      processingRef.current =
-        false;
-
-      setProcessing(false);
+        setProcessing(false);
+      }
     }
   }
 
@@ -958,28 +801,39 @@ export default function Home() {
     const audio =
       new Audio(url);
 
-
-    /*
-     * ระหว่าง AI พูด
-     * processingRef ยังเป็น true
-     *
-     * ทำให้ VAD ไม่อัดเสียง AI
-     * กลับเข้า microphone pipeline
-     */
-    await audio.play();
-
+    activeAudioRef.current = audio;
 
     await new Promise<void>(
-      (resolve) => {
+      (resolve, reject) => {
+        let finished = false;
 
-        audio.onended = () => {
+        const finish = () => {
+          if (finished) {
+            return;
+          }
 
+          finished = true;
+
+          if (activeAudioRef.current === audio) {
+            activeAudioRef.current = null;
+          }
           URL.revokeObjectURL(
             url
           );
-
           resolve();
         };
+
+        audio.onended = finish;
+        audio.onpause = finish;
+
+        void audio.play().catch((error) => {
+          if (!finished) {
+            finished = true;
+            activeAudioRef.current = null;
+            URL.revokeObjectURL(url);
+          }
+          reject(error);
+        });
       }
     );
   }
@@ -990,15 +844,9 @@ export default function Home() {
   ========================================= */
 
   function stopAllMedia() {
-
-    if (vadTimerRef.current) {
-
-      window.cancelAnimationFrame(
-        vadTimerRef.current
-      );
-    }
-
-
+    pushToTalkHeldRef.current = false;
+    stopRecording();
+    activeAudioRef.current?.pause();
     cameraStreamRef.current
       ?.getTracks()
       .forEach(
@@ -1013,10 +861,6 @@ export default function Home() {
         (track) =>
           track.stop()
       );
-
-
-    audioContextRef.current
-      ?.close();
   }
 
 
@@ -1063,6 +907,78 @@ export default function Home() {
       stopAllMedia();
     };
 
+    // เริ่มและ cleanup media เฉพาะตอน mount/unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
+  /*
+   * Push-to-talk: กด Spacebar ค้างเพื่ออัดเสียง
+   * และปล่อย Spacebar เพื่อหยุดและส่ง STT
+   */
+  useEffect(() => {
+    const handleKeyDown = (
+      event: KeyboardEvent,
+    ) => {
+      if (
+        event.code !== "Space"
+        || event.repeat
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      pushToTalkHeldRef.current = true;
+      void preparePushToTalk();
+    };
+
+    const handleKeyUp = (
+      event: KeyboardEvent,
+    ) => {
+      if (event.code !== "Space") {
+        return;
+      }
+
+      event.preventDefault();
+      pushToTalkHeldRef.current = false;
+      stopRecording();
+    };
+
+    const handleBlur = () => {
+      pushToTalkHeldRef.current = false;
+      stopRecording();
+    };
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown,
+    );
+    window.addEventListener(
+      "keyup",
+      handleKeyUp,
+    );
+    window.addEventListener(
+      "blur",
+      handleBlur,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown,
+      );
+      window.removeEventListener(
+        "keyup",
+        handleKeyUp,
+      );
+      window.removeEventListener(
+        "blur",
+        handleBlur,
+      );
+    };
+
+    // handlers ใช้ refs ซึ่งคงที่ตลอดอายุ component
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -1213,7 +1129,9 @@ export default function Home() {
               ? "AI กำลังประมวลผล..."
               : listening
                 ? "🎙 กำลังฟัง..."
-                : "🎤 พร้อมรับเสียง"}
+                : sessionTokenRef.current
+                  ? "🎤 กด Spacebar ค้างเพื่อพูด"
+                  : "กำลังรอการตรวจสอบใบหน้า"}
 
           </div>
 

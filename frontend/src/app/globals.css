@@ -828,7 +828,12 @@ body {
 
 .schedule-meeting-row {
   display: grid;
-  grid-template-columns: 74px minmax(150px, 0.8fr) 1fr 1fr;
+  grid-template-columns:
+    68px
+    minmax(120px, 0.7fr)
+    minmax(120px, 0.75fr)
+    minmax(120px, 0.75fr)
+    minmax(220px, 1.4fr);
   align-items: start;
   gap: 12px;
   padding: 12px;
@@ -922,5 +927,6 @@ body {
 
 @media (min-width: 801px) and (max-width: 1000px) {
   .schedule-course-grid { grid-template-columns: 1fr 1.4fr; }
-  .schedule-meeting-row { grid-template-columns: 70px repeat(3, 1fr); }
+  .schedule-meeting-row { grid-template-columns: 70px repeat(2, 1fr); }
+  .schedule-meeting-row label:last-of-type { grid-column: 2 / -1; }
 }

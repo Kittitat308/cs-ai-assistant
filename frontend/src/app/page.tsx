@@ -10,11 +10,20 @@ const API_URL =
 
 type ModalStep = "form" | "schedule" | "scan" | "success" | null;
 
+type RoomOption = {
+  id: number;
+  name: string;
+  floor: number;
+  room_type: string;
+  building: string;
+};
+
 type MeetingDraft = {
   id: number;
   dayOfWeek: string;
   startTime: string;
   endTime: string;
+  roomId: string;
 };
 
 type ScheduleDraft = {
@@ -39,6 +48,8 @@ export default function HomePage() {
   const [externalId, setExternalId] = useState("");
   const [role, setRole] = useState("student");
   const [schedules, setSchedules] = useState<ScheduleDraft[]>([]);
+  const [rooms, setRooms] = useState<RoomOption[]>([]);
+  const [loadingRooms, setLoadingRooms] = useState(false);
   const [studentIdError, setStudentIdError] = useState("");
   const [checkingStudentId, setCheckingStudentId] = useState(false);
   const [error, setError] = useState("");
@@ -131,6 +142,38 @@ export default function HomePage() {
     }
   }
 
+  async function loadRooms(): Promise<boolean> {
+    if (rooms.length > 0) {
+      return true;
+    }
+
+    setLoadingRooms(true);
+
+    try {
+      const response = await fetch(`${API_URL}/api/rooms`);
+
+      if (!response.ok) {
+        throw new Error("Room request failed");
+      }
+
+      const data: RoomOption[] = await response.json();
+
+      if (data.length === 0) {
+        setError("ยังไม่มีข้อมูลห้องในระบบ กรุณาเพิ่มข้อมูลห้องก่อน");
+        return false;
+      }
+
+      setRooms(data);
+      return true;
+    } catch (roomError) {
+      console.error("Room loading error:", roomError);
+      setError("ไม่สามารถโหลดข้อมูลห้องได้ กรุณาตรวจสอบว่า Backend เปิดอยู่");
+      return false;
+    } finally {
+      setLoadingRooms(false);
+    }
+  }
+
   async function continueToSchedule(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -143,6 +186,10 @@ export default function HomePage() {
     }
 
     if (!(await checkStudentId())) {
+      return;
+    }
+
+    if (!(await loadRooms())) {
       return;
     }
 
@@ -169,6 +216,7 @@ export default function HomePage() {
           dayOfWeek: "",
           startTime: "",
           endTime: "",
+          roomId: "",
         }],
       },
     ]);
@@ -191,7 +239,7 @@ export default function HomePage() {
   function updateMeeting(
     scheduleId: number,
     meetingId: number,
-    field: "dayOfWeek" | "startTime" | "endTime",
+    field: "dayOfWeek" | "startTime" | "endTime" | "roomId",
     value: string,
   ) {
     setSchedules((current) =>
@@ -232,6 +280,7 @@ export default function HomePage() {
             dayOfWeek: "",
             startTime: "",
             endTime: "",
+            roomId: "",
           });
         }
 
@@ -258,6 +307,7 @@ export default function HomePage() {
         meeting.dayOfWeek
         && meeting.startTime
         && meeting.endTime
+        && meeting.roomId
         && meeting.endTime > meeting.startTime
       )),
     );
@@ -339,6 +389,7 @@ export default function HomePage() {
               day_of_week: meeting.dayOfWeek,
               start_time: meeting.startTime,
               end_time: meeting.endTime,
+              room_id: Number(meeting.roomId),
             })),
           })),
         ),
@@ -544,10 +595,14 @@ export default function HomePage() {
 
                   <button
                     className="button button-primary modal-submit"
-                    disabled={checkingStudentId}
+                    disabled={checkingStudentId || loadingRooms}
                     type="submit"
                   >
-                    {checkingStudentId ? "กำลังตรวจสอบรหัส..." : "ถัดไป"}
+                    {checkingStudentId
+                      ? "กำลังตรวจสอบรหัส..."
+                      : loadingRooms
+                        ? "กำลังโหลดข้อมูลห้อง..."
+                        : "ถัดไป"}
                   </button>
                 </form>
               </>
@@ -719,9 +774,33 @@ export default function HomePage() {
                                       value={meeting.endTime}
                                     />
                                   </label>
-                                  {(!meeting.dayOfWeek || !meeting.startTime || !meeting.endTime) && (
+                                  <label>
+                                    ห้องเรียน
+                                    <select
+                                      onChange={(event) => updateMeeting(
+                                        schedule.id,
+                                        meeting.id,
+                                        "roomId",
+                                        event.target.value,
+                                      )}
+                                      value={meeting.roomId}
+                                    >
+                                      <option value="">เลือกห้อง</option>
+                                      {rooms.map((room) => (
+                                        <option key={room.id} value={room.id}>
+                                          {room.name} — ชั้น {room.floor}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  {(
+                                    !meeting.dayOfWeek
+                                    || !meeting.startTime
+                                    || !meeting.endTime
+                                    || !meeting.roomId
+                                  ) && (
                                     <span className="schedule-field-error schedule-meeting-error">
-                                      กรุณาป้อนวันและเวลาให้ครบ
+                                      กรุณาป้อนวัน เวลา และห้องเรียนให้ครบ
                                     </span>
                                   )}
                                   {invalidTime && (

@@ -66,3 +66,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+
+    lecturer_profile = relationship(
+        "LecturerProfile",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )

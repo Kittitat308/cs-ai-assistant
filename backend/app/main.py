@@ -14,6 +14,7 @@ from app.routers import (
     face,
     health,
     registration,
+    rooms,
     voice,
 )
 
@@ -88,6 +89,19 @@ async def lifespan(app: FastAPI):
                 "ALTER COLUMN meeting_index DROP DEFAULT"
             )
         )
+        connection.execute(
+            text(
+                "ALTER TABLE class_schedules "
+                "ADD COLUMN IF NOT EXISTS room_id "
+                "INTEGER REFERENCES rooms(id) ON DELETE SET NULL"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_class_schedules_room_id ON class_schedules (room_id)"
+            )
+        )
 
     yield
 
@@ -135,6 +149,10 @@ app.include_router(
 
 app.include_router(
     registration.router
+)
+
+app.include_router(
+    rooms.router
 )
 
 app.include_router(

@@ -105,6 +105,34 @@ class FaceService:
 
         return embedding
 
+    def get_primary_face_embedding(
+        self,
+        image_bytes: bytes,
+    ) -> np.ndarray:
+        """เลือกใบหน้าที่มีกรอบใหญ่ที่สุดสำหรับการรู้จำหน้ากล้อง"""
+
+        image = self.decode_image(image_bytes)
+        faces = self.app.get(image)
+
+        if len(faces) == 0:
+            raise ValueError("NO_FACE")
+
+        primary_face = max(
+            faces,
+            key=lambda face: max(
+                0.0,
+                float(face.bbox[2] - face.bbox[0]),
+            ) * max(
+                0.0,
+                float(face.bbox[3] - face.bbox[1]),
+            ),
+        )
+
+        return np.asarray(
+            primary_face.normed_embedding,
+            dtype=np.float32,
+        )
+
     @staticmethod
     def cosine_similarity(
         embedding_a: np.ndarray,
@@ -128,7 +156,7 @@ class FaceService:
         เปรียบเทียบใบหน้ากับ embedding ใน PostgreSQL
         """
 
-        input_embedding = self.get_single_face_embedding(
+        input_embedding = self.get_primary_face_embedding(
             image_bytes
         )
 
