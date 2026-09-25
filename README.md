@@ -1,6 +1,6 @@
 # CS AI Assistant
 
-เว็บแอปผู้ช่วย AI สำหรับสาขาวิทยาการคอมพิวเตอร์ รองรับการสนทนาด้วยเสียง การจดจำใบหน้า การระบุตัวตนผู้ใช้ และการนำข้อมูลจาก PostgreSQL เช่น ข้อมูลผู้ใช้และตารางเรียน มาใช้ตอบคำถาม
+เว็บแอปผู้ช่วย AI สำหรับสาขาวิทยาการคอมพิวเตอร์ รองรับการสนทนาด้วยเสียง การจดจำใบหน้า การระบุตัวตนผู้ใช้ และการนำข้อมูลจาก SQLite เช่น ข้อมูลผู้ใช้และตารางเรียน มาใช้ตอบคำถาม
 
 ## ความสามารถหลัก
 
@@ -21,7 +21,7 @@
 |---|---|
 | Frontend | Next.js 16, React 19, TypeScript |
 | Backend | FastAPI, Python 3.11 |
-| Database | PostgreSQL, SQLAlchemy |
+| Database | SQLite, SQLAlchemy |
 | Speech-to-Text | Groq API (`whisper-large-v3-turbo`) |
 | AI | Google Gemini API |
 | Text-to-Speech | Edge TTS |
@@ -50,7 +50,6 @@ cs-ai-assistant/
 
 - Python 3.11
 - Node.js 20 ขึ้นไป
-- PostgreSQL 14 ขึ้นไป
 - เว็บเบราว์เซอร์ที่อนุญาตการใช้กล้องและไมโครโฟน
 - API key ของ [Groq](https://console.groq.com/keys)
 - API key ของ [Google AI Studio](https://aistudio.google.com/app/apikey)
@@ -66,17 +65,7 @@ git clone https://github.com/Kittitat308/cs-ai-assistant.git
 cd cs-ai-assistant
 ```
 
-### 2. สร้างฐานข้อมูล PostgreSQL
-
-เข้าสู่ PostgreSQL แล้วสร้างฐานข้อมูล:
-
-```sql
-CREATE DATABASE cs_ai_assistant;
-```
-
-ระบบจะสร้างตารางที่จำเป็นให้อัตโนมัติเมื่อ Backend เริ่มทำงานครั้งแรก
-
-### 3. ตั้งค่าและติดตั้ง Backend
+### 2. ตั้งค่าและติดตั้ง Backend
 
 คำสั่งสำหรับ Windows PowerShell:
 
@@ -95,7 +84,7 @@ APP_NAME=CS AI Assistant
 DEBUG=true
 FRONTEND_URL=http://localhost:3000
 
-DATABASE_URL=postgresql+psycopg://postgres:รหัสผ่าน_PostgreSQL@localhost:5432/cs_ai_assistant
+DATABASE_PATH=data/cs_ai_assistant.db
 
 GROQ_API_KEY=ใส่_Groq_API_Key
 GROQ_STT_MODEL=whisper-large-v3-turbo
@@ -119,7 +108,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 เมื่อเปิดครั้งแรก InsightFace อาจดาวน์โหลดโมเดล `buffalo_l` จึงใช้เวลานานกว่าปกติ ตรวจสอบสถานะได้ที่ [http://localhost:8000/health](http://localhost:8000/health) และเอกสาร API ที่ [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### 4. ตั้งค่าและติดตั้ง Frontend
+ระบบจะสร้างไฟล์ `backend/data/cs_ai_assistant.db` และตารางที่จำเป็นให้อัตโนมัติ ไฟล์ฐานข้อมูลถูกละเว้นจาก Git เพราะมีข้อมูลส่วนบุคคลและ face embedding
+
+### 3. ตั้งค่าและติดตั้ง Frontend
 
 เปิด PowerShell อีกหน้าต่างหนึ่งจากโฟลเดอร์โปรเจกต์:
 
@@ -157,13 +148,26 @@ python scripts\enroll_teachers.py "C:\path\to\teacher-images"
 
 ## เพิ่มหรือปรับปรุงข้อมูลห้อง
 
-ข้อมูลห้องเริ่มต้นของสาขาอยู่ใน `backend/scripts/seed_rooms.py` สามารถเพิ่มหรือปรับปรุงใน PostgreSQL โดยไม่สร้างข้อมูลซ้ำด้วยคำสั่ง:
+ข้อมูลห้องเริ่มต้นของสาขาอยู่ใน `backend/scripts/seed_rooms.py` สามารถเพิ่มหรือปรับปรุงใน SQLite โดยไม่สร้างข้อมูลซ้ำด้วยคำสั่ง:
 
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
 python scripts\seed_rooms.py
 ```
+
+## ย้ายข้อมูลเดิมจาก PostgreSQL
+
+สคริปต์ migration จะอ่าน PostgreSQL ด้วย read-only transaction, สร้าง SQLite ใหม่ และตรวจจำนวนแถว primary keys, foreign keys รวมถึง face embedding 512 มิติ ห้ามกำหนดไฟล์ปลายทางที่มีอยู่แล้วเพราะสคริปต์จะไม่เขียนทับ:
+
+```powershell
+cd backend
+$env:POSTGRES_SOURCE_URL="postgresql+psycopg://user:password@localhost:5432/cs_ai_assistant"
+python scripts\migrate_postgres_to_sqlite.py --target data\cs_ai_assistant.db
+Remove-Item Env:POSTGRES_SOURCE_URL
+```
+
+ระหว่างเปลี่ยนระบบ สคริปต์สามารถอ่านค่า `DATABASE_URL` เดิมจาก `backend/.env` แทน `POSTGRES_SOURCE_URL` ได้ แต่ตัวแอปใช้งานเฉพาะ `DATABASE_PATH` หลัง migration แล้ว
 
 ## การตรวจสอบก่อนใช้งาน
 

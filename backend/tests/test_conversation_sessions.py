@@ -2,10 +2,7 @@ import os
 import unittest
 
 
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+psycopg://test:test@localhost/test",
-)
+os.environ.setdefault("DATABASE_PATH", ":memory:")
 os.environ.setdefault("GROQ_API_KEY", "test")
 os.environ.setdefault("GEMINI_API_KEY", "test")
 os.environ.setdefault("ADMIN_TOKEN", "test")

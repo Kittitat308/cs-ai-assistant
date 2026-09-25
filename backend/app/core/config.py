@@ -18,8 +18,10 @@ class Settings(BaseSettings):
     # Frontend
     frontend_url: str = "http://localhost:3000"
 
-    # Database
-    database_url: str
+    # SQLite database path (relative paths are resolved from backend/)
+    database_path: str = "data/cs_ai_assistant.db"
+    # รองรับ DATABASE_URL เดิมเฉพาะช่วง migration; ตัวแอปจะไม่ใช้ค่านี้เชื่อมต่อ
+    database_url: str | None = None
 
     # Groq STT
     groq_api_key: str

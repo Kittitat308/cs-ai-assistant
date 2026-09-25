@@ -5,6 +5,7 @@ python-dotenv
 pydantic-settings
 
 sqlalchemy
+# ใช้เฉพาะสคริปต์ย้ายข้อมูลเดิมจาก PostgreSQL ไป SQLite
 psycopg[binary]
 
 groq

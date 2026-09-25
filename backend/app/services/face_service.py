@@ -164,7 +164,7 @@ class FaceService:
         image_bytes: bytes,
     ):
         """
-        เปรียบเทียบใบหน้ากับ PostgreSQL และคืน embedding สำหรับติดตาม Guest
+        เปรียบเทียบใบหน้ากับ SQLite และคืน embedding สำหรับติดตาม Guest
         """
 
         input_embedding = self.get_primary_face_embedding(
