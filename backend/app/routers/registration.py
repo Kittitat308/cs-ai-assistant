@@ -131,7 +131,7 @@ def check_student_id_availability(
 
     exists = (
         db.query(User.id)
-        .filter(User.external_id == student_id)
+        .filter(User.student_id == student_id)
         .first()
         is not None
     )
@@ -142,7 +142,7 @@ def check_student_id_availability(
 @router.post("")
 async def register_user(
     name: str = Form(...),
-    external_id: str = Form(""),
+    student_id: str = Form(""),
     role: str = Form(...),
     schedules: str = Form("[]"),
     image: UploadFile = File(...),
@@ -161,13 +161,13 @@ async def register_user(
     if role not in ALLOWED_ROLES:
         raise HTTPException(400, "สถานะผู้ใช้ไม่ถูกต้อง")
 
-    clean_external_id = external_id.strip()
+    clean_student_id = student_id.strip()
 
     if role == "student":
-        if len(clean_external_id) != 10 or not clean_external_id.isdigit():
+        if len(clean_student_id) != 10 or not clean_student_id.isdigit():
             raise HTTPException(400, "รหัสนักศึกษาต้องเป็นตัวเลข 10 หลัก")
     else:
-        clean_external_id = None
+        clean_student_id = None
 
     parsed_schedules = parse_schedules(schedules)
 
@@ -191,10 +191,10 @@ async def register_user(
 
     existing = None
 
-    if clean_external_id is not None:
+    if clean_student_id is not None:
         existing = (
             db.query(User)
-            .filter(User.external_id == clean_external_id)
+            .filter(User.student_id == clean_student_id)
             .first()
         )
 
@@ -221,7 +221,7 @@ async def register_user(
 
     try:
         user = User(
-            external_id=clean_external_id,
+            student_id=clean_student_id,
             name=clean_name,
             role=role,
         )
@@ -256,7 +256,8 @@ async def register_user(
         "status": "success",
         "user": {
             "id": user.id,
-            "external_id": user.external_id,
+            "student_id": user.student_id,
+            "email": user.email,
             "name": user.name,
             "role": user.role,
         },

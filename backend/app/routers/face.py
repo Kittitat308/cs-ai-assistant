@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -9,9 +7,12 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.models.conversation import ChatSession, SessionProfile
 from app.services.face_service import face_service
+from app.services.conversation_session_service import (
+    conversation_session_service,
+)
 
 
 router = APIRouter(
@@ -37,7 +38,7 @@ async def recognize_face(
     image_bytes = await image.read()
 
     try:
-        user, similarity = face_service.recognize(
+        user, similarity, embedding = face_service.recognize_with_embedding(
             db,
             image_bytes,
         )
@@ -59,81 +60,32 @@ async def recognize_face(
 
         raise
 
-    # ------------------------------------------
-    # ตรวจ session เดิม
-    # ------------------------------------------
-
-    chat_session = None
-
-    if session_token:
-        chat_session = (
-            db.query(ChatSession)
-            .filter(
-                ChatSession.token
-                == session_token
-            )
-            .first()
-        )
-
-    # ------------------------------------------
-    # Unknown user
-    # ------------------------------------------
-
     if user is None:
-
-        # ห้าม guest คนใหม่ใช้ session ของผู้ใช้ที่ยืนยันตัวตนแล้ว
-        if (
-            chat_session is None
-            or chat_session.user_id is not None
-        ):
-            chat_session = ChatSession(
-                user_id=None,
-            )
-
-            db.add(chat_session)
-
-        chat_session.last_seen_at = datetime.utcnow()
-
-        db.commit()
-        db.refresh(chat_session)
-
-        profile = db.get(
-            SessionProfile,
-            chat_session.id,
+        session = conversation_session_service.resolve_face_session(
+            session_token,
+            user_id=None,
+            face_embedding=embedding.tolist(),
+            face_threshold=settings.face_threshold,
         )
 
         return {
             "status": "unknown",
             "recognized": False,
             "similarity": similarity,
-            "session_token": chat_session.token,
-            "claimed_name": (
-                profile.claimed_name
-                if profile is not None
-                else None
-            ),
+            "session_token": session.token,
+            "claimed_name": session.claimed_name,
         }
 
     # ------------------------------------------
     # Known user
     # ------------------------------------------
 
-    # ถ้า session เดิมเป็นคนอื่น
-    # สร้าง session ใหม่ทันที
-    if (
-        chat_session is None
-        or chat_session.user_id != user.id
-    ):
-        chat_session = ChatSession(
-            user_id=user.id,
-        )
-
-        db.add(chat_session)
-
-    chat_session.last_seen_at = datetime.utcnow()
-
-    db.commit()
-    db.refresh(chat_session)
+    session = conversation_session_service.resolve_face_session(
+        session_token,
+        user_id=user.id,
+        face_embedding=embedding.tolist(),
+        face_threshold=settings.face_threshold,
+    )
 
     return {
         "status": "recognized",
@@ -145,5 +97,5 @@ async def recognize_face(
 
         "similarity": similarity,
 
-        "session_token": chat_session.token,
+        "session_token": session.token,
     }

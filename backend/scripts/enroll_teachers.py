@@ -123,13 +123,13 @@ def enroll_teachers(image_directory: Path) -> tuple[list[str], list[str]]:
         for teacher, embedding in prepared:
             user = (
                 db.query(User)
-                .filter(or_(User.external_id == teacher.email, User.name == teacher.name))
+                .filter(or_(User.email == teacher.email, User.name == teacher.name))
                 .first()
             )
 
             if user is None:
                 user = User(
-                    external_id=teacher.email,
+                    email=teacher.email,
                     name=teacher.name,
                     role="lecturer",
                 )
@@ -137,7 +137,7 @@ def enroll_teachers(image_directory: Path) -> tuple[list[str], list[str]]:
                 db.flush()
                 created.append(teacher.name)
             else:
-                user.external_id = teacher.email
+                user.email = teacher.email
                 user.name = teacher.name
                 user.role = "lecturer"
                 updated.append(teacher.name)

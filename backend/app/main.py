@@ -102,6 +102,54 @@ async def lifespan(app: FastAPI):
                 "ix_class_schedules_room_id ON class_schedules (room_id)"
             )
         )
+        connection.execute(
+            text(
+                "ALTER TABLE users "
+                "ADD COLUMN IF NOT EXISTS student_id VARCHAR(10)"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE users "
+                "ADD COLUMN IF NOT EXISTS email VARCHAR(255)"
+            )
+        )
+        connection.execute(
+            text(
+                "DO $$ "
+                "BEGIN "
+                "IF EXISTS ("
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'users' AND column_name = 'external_id'"
+                ") THEN "
+                "UPDATE users SET student_id = external_id "
+                "WHERE student_id IS NULL "
+                "AND external_id ~ '^[0-9]{10}$'; "
+                "UPDATE users SET email = LOWER(external_id) "
+                "WHERE email IS NULL AND POSITION('@' IN external_id) > 1; "
+                "ALTER TABLE users DROP COLUMN external_id; "
+                "END IF; "
+                "END $$"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "ix_users_student_id ON users (student_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "ix_users_email ON users (email)"
+            )
+        )
+        connection.execute(
+            text(
+                "DROP TABLE IF EXISTS "
+                "session_profiles, messages, chat_sessions CASCADE"
+            )
+        )
 
     yield
 

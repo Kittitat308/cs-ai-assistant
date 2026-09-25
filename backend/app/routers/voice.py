@@ -11,12 +11,10 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.conversation import (
-    ChatSession,
-    Message,
-    SessionProfile,
-)
 from app.services.ai_service import ai_service
+from app.services.conversation_session_service import (
+    conversation_session_service,
+)
 from app.services.stt_service import stt_service
 from app.services.tts_service import tts_service
 
@@ -48,23 +46,13 @@ async def converse(
     """
 
     # -----------------------------------------
-    # Validate session
+    # Resolve session ใน memory; ถ้า token หายหลัง reset/restart
+    # ให้สร้าง Guest session ใหม่และทำ pipeline ต่อทันที
     # -----------------------------------------
 
-    session = (
-        db.query(ChatSession)
-        .filter(
-            ChatSession.token
-            == session_token
-        )
-        .first()
+    session = conversation_session_service.get_or_create_for_voice(
+        session_token
     )
-
-    if session is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid session",
-        )
 
     # -----------------------------------------
     # Read audio
@@ -104,36 +92,14 @@ async def converse(
     )
 
     # -----------------------------------------
-    # Save conversation memory
+    # Save conversation memory ใน Python เท่านั้น
     # -----------------------------------------
 
-    db.add(
-        Message(
-            session_id=session.id,
-            role="user",
-            content=user_text,
-        )
+    conversation_session_service.append_exchange(
+        session,
+        user_text,
+        assistant_text,
     )
-
-    db.add(
-        Message(
-            session_id=session.id,
-            role="assistant",
-            content=assistant_text,
-        )
-    )
-
-    db.commit()
-
-    claimed_name = None
-
-    if session.user_id is None:
-        profile = db.get(SessionProfile, session.id)
-        claimed_name = (
-            profile.claimed_name
-            if profile is not None
-            else None
-        )
 
     # -----------------------------------------
     # Text-to-Speech
@@ -155,5 +121,6 @@ async def converse(
 
         "audio": audio_base64,
         "audio_mime_type": "audio/mpeg",
-        "claimed_name": claimed_name,
+        "claimed_name": session.claimed_name,
+        "session_token": session.token,
     }

@@ -12,8 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.conversation import ChatSession, Message, SessionProfile
 from app.models.user import User
+from app.services.conversation_session_service import (
+    ConversationMessage,
+    ConversationSession,
+    conversation_session_service,
+)
 from app.services.tool_service import tool_service
 
 
@@ -102,13 +106,12 @@ class AIService:
     @staticmethod
     def get_user_context(
         db: Session,
-        session: ChatSession,
+        session: ConversationSession,
     ) -> str:
         """คืนเฉพาะ identity ขั้นพื้นฐาน ห้ามแนบข้อมูลอื่นล่วงหน้า"""
 
         if session.user_id is None:
-            profile = db.get(SessionProfile, session.id)
-            name = profile.claimed_name if profile is not None else "ไม่ทราบ"
+            name = session.claimed_name or "ไม่ทราบ"
 
             return (
                 "ผู้ใช้ปัจจุบัน:\n"
@@ -165,7 +168,7 @@ class AIService:
     def remember_claimed_name(
         cls,
         db: Session,
-        session: ChatSession,
+        session: ConversationSession,
         user_text: str,
     ) -> str | None:
         """จำชื่อที่ guest แจ้งไว้ใน session โดยยังไม่ยืนยันตัวตน"""
@@ -178,41 +181,22 @@ class AIService:
         if name is None:
             return None
 
-        profile = db.get(SessionProfile, session.id)
-
-        if profile is None:
-            profile = SessionProfile(
-                session_id=session.id,
-                claimed_name=name,
-            )
-            db.add(profile)
-        else:
-            profile.claimed_name = name
-
-        db.flush()
+        session.claimed_name = name
         return name
 
     @staticmethod
     def get_history(
-        db: Session,
-        session_id: int,
+        _db: Session,
+        session: ConversationSession,
         limit: int = 8,
-    ) -> list[Message]:
-        """ดึงเฉพาะบทสนทนาจริง 8 ข้อความล่าสุดของ session"""
+    ) -> list[ConversationMessage]:
+        """ดึงบทสนทนา 8 ข้อความล่าสุด (4 รอบ) จาก memory"""
 
-        messages = (
-            db.query(Message)
-            .filter(Message.session_id == session_id)
-            .order_by(Message.id.desc())
-            .limit(limit)
-            .all()
-        )
-
-        return list(reversed(messages))
+        return conversation_session_service.get_history(session, limit)
 
     @staticmethod
     def _build_contents(
-        history: list[Message],
+        history: list[ConversationMessage],
         user_text: str,
     ) -> list[types.Content]:
         contents = []
@@ -334,7 +318,7 @@ functions ที่ Backend อนุญาต:
     async def generate_reply(
         self,
         db: Session,
-        session: ChatSession,
+        session: ConversationSession,
         user_text: str,
     ) -> str:
         """เรียก Gemini 1 ครั้ง หรือสูงสุด 2 ครั้งเมื่อจำเป็นต้องใช้ function"""
@@ -346,7 +330,7 @@ functions ที่ Backend อนุญาต:
             self.get_current_time_context(),
         )
         contents = self._build_contents(
-            self.get_history(db, session.id),
+            self.get_history(db, session),
             user_text,
         )
 

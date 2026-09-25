@@ -56,14 +56,25 @@ def create_user(
     สำหรับเปลี่ยนตัวเองเป็น student/lecturer
     """
 
-    existing = (
-        db.query(User)
-        .filter(
-            User.external_id
-            == data.external_id
-        )
-        .first()
-    )
+    student_id = data.student_id.strip() if data.student_id else None
+    email = data.email.strip().lower() if data.email else None
+
+    if data.role == "student":
+        if student_id is None or len(student_id) != 10 or not student_id.isdigit():
+            raise HTTPException(400, "รหัสนักศึกษาต้องเป็นตัวเลข 10 หลัก")
+    elif student_id is not None:
+        raise HTTPException(400, "กำหนดรหัสนักศึกษาได้เฉพาะ role student")
+
+    if email is not None and "@" not in email:
+        raise HTTPException(400, "อีเมลไม่ถูกต้อง")
+
+    existing = None
+
+    if student_id is not None:
+        existing = db.query(User).filter(User.student_id == student_id).first()
+
+    if existing is None and email is not None:
+        existing = db.query(User).filter(User.email == email).first()
 
     if existing:
         raise HTTPException(
@@ -72,7 +83,8 @@ def create_user(
         )
 
     user = User(
-        external_id=data.external_id,
+        student_id=student_id,
+        email=email,
         name=data.name,
         role=data.role,
     )
@@ -83,7 +95,8 @@ def create_user(
 
     return {
         "id": user.id,
-        "external_id": user.external_id,
+        "student_id": user.student_id,
+        "email": user.email,
         "name": user.name,
         "role": user.role,
     }

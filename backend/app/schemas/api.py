@@ -6,8 +6,9 @@ class CreateUserRequest(BaseModel):
     Request สำหรับ Admin สร้างนักศึกษา/อาจารย์
     """
 
-    external_id: str
     name: str
+    student_id: str | None = None
+    email: str | None = None
 
     role: str = Field(
         pattern="^(student|lecturer|admin)$",
@@ -16,7 +17,8 @@ class CreateUserRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: int
-    external_id: str | None
+    student_id: str | None
+    email: str | None
     name: str
     role: str
 

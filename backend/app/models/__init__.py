@@ -1,5 +1,4 @@
 # Import models เพื่อให้ SQLAlchemy รู้จัก table ทุกตัว
-from app.models.conversation import ChatSession, Message, SessionProfile
 from app.models.face import FaceEmbedding
 from app.models.lecturer import LecturerProfile
 from app.models.room import Room
@@ -11,8 +10,5 @@ __all__ = [
     "FaceEmbedding",
     "LecturerProfile",
     "Room",
-    "ChatSession",
-    "Message",
-    "SessionProfile",
     "ClassSchedule",
 ]

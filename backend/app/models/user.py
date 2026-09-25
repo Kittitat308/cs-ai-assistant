@@ -24,9 +24,15 @@ class User(Base):
         autoincrement=True,
     )
 
-    # รหัสนักศึกษา/รหัสบุคลากร
-    external_id: Mapped[str | None] = mapped_column(
-        String(50),
+    student_id: Mapped[str | None] = mapped_column(
+        String(10),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+
+    email: Mapped[str | None] = mapped_column(
+        String(255),
         unique=True,
         nullable=True,
         index=True,

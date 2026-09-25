@@ -124,6 +124,9 @@ export default function Home() {
   const [processing, setProcessing] =
     useState(false);
 
+  const [hasSession, setHasSession] =
+    useState(false);
+
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
 
@@ -265,16 +268,13 @@ export default function Home() {
       previousToken
       && previousToken !== nextToken
     ) {
-      stopRecording();
-      activeAudioRef.current?.pause();
       setMessages([]);
       setClaimedName(null);
-      processingRef.current = false;
-      setProcessing(false);
     }
 
     sessionTokenRef.current =
       nextToken;
+    setHasSession(true);
   }
 
   async function recognizeFace() {
@@ -470,8 +470,6 @@ export default function Home() {
 
       if (
         !pushToTalkHeldRef.current
-        || sessionTokenRef.current
-          !== requestedSessionToken
       ) {
         stream.getTracks().forEach(
           (track) => track.stop(),
@@ -519,8 +517,6 @@ export default function Home() {
         if (
           audioBlob.size > 500
           && recordedSessionToken
-          && recordedSessionToken
-            === sessionTokenRef.current
         ) {
           await sendVoice(
             audioBlob,
@@ -622,11 +618,7 @@ export default function Home() {
     requestSessionToken: string,
   ) {
 
-    if (
-      !sessionTokenRef.current
-      || sessionTokenRef.current
-        !== requestSessionToken
-    ) {
+    if (!requestSessionToken) {
       return;
     }
 
@@ -684,13 +676,10 @@ export default function Home() {
         await response.json();
 
       if (
-        sessionTokenRef.current
-        !== requestSessionToken
+        data.claimed_name
+        && sessionTokenRef.current
+          === requestSessionToken
       ) {
-        return;
-      }
-
-      if (data.claimed_name) {
         setClaimedName(
           data.claimed_name
         );
@@ -735,15 +724,10 @@ export default function Home() {
       );
 
     } finally {
-      if (
-        sessionTokenRef.current
-        === requestSessionToken
-      ) {
-        processingRef.current =
-          false;
+      processingRef.current =
+        false;
 
-        setProcessing(false);
-      }
+      setProcessing(false);
     }
   }
 
@@ -1129,7 +1113,7 @@ export default function Home() {
               ? "AI กำลังประมวลผล..."
               : listening
                 ? "🎙 กำลังฟัง..."
-                : sessionTokenRef.current
+                : hasSession
                   ? "🎤 กด Spacebar ค้างเพื่อพูด"
                   : "กำลังรอการตรวจสอบใบหน้า"}
 

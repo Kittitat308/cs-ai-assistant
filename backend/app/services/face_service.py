@@ -152,8 +152,19 @@ class FaceService:
         db: Session,
         image_bytes: bytes,
     ):
+        user, similarity, _embedding = self.recognize_with_embedding(
+            db,
+            image_bytes,
+        )
+        return user, similarity
+
+    def recognize_with_embedding(
+        self,
+        db: Session,
+        image_bytes: bytes,
+    ):
         """
-        เปรียบเทียบใบหน้ากับ embedding ใน PostgreSQL
+        เปรียบเทียบใบหน้ากับ PostgreSQL และคืน embedding สำหรับติดตาม Guest
         """
 
         input_embedding = self.get_primary_face_embedding(
@@ -182,13 +193,13 @@ class FaceService:
 
         # ไม่มีข้อมูลใบหน้าในระบบเลย
         if best_face is None:
-            return None, 0.0
+            return None, 0.0, input_embedding
 
         # similarity ต่ำกว่า threshold
         if best_similarity < settings.face_threshold:
-            return None, best_similarity
+            return None, best_similarity, input_embedding
 
-        return best_face.user, best_similarity
+        return best_face.user, best_similarity, input_embedding
 
 
 # สร้าง service เพียงครั้งเดียว

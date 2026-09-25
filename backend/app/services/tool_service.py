@@ -8,11 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.conversation import ChatSession
 from app.models.lecturer import LecturerProfile
 from app.models.room import Room
 from app.models.schedule import ClassSchedule
 from app.models.user import User
+from app.services.conversation_session_service import ConversationSession
 
 
 class ScheduleArguments(BaseModel):
@@ -111,7 +111,7 @@ class ToolService:
     def execute_calls(
         self,
         db: Session,
-        session: ChatSession,
+        session: ConversationSession,
         calls: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Validate และเรียกเฉพาะ function ที่อยู่ใน whitelist"""
@@ -163,7 +163,7 @@ class ToolService:
     def _get_my_schedule(
         self,
         db: Session,
-        session: ChatSession,
+        session: ConversationSession,
         raw_arguments: dict[str, Any],
     ) -> dict[str, Any]:
         arguments = ScheduleArguments.model_validate(raw_arguments)
@@ -229,7 +229,7 @@ class ToolService:
     @staticmethod
     def _get_lecturer_info(
         db: Session,
-        _session: ChatSession,
+        _session: ConversationSession,
         raw_arguments: dict[str, Any],
     ) -> dict[str, Any]:
         arguments = LecturerArguments.model_validate(raw_arguments)
@@ -271,7 +271,7 @@ class ToolService:
     @staticmethod
     def _get_room_info(
         db: Session,
-        _session: ChatSession,
+        _session: ConversationSession,
         raw_arguments: dict[str, Any],
     ) -> dict[str, Any]:
         arguments = RoomArguments.model_validate(raw_arguments)
@@ -309,7 +309,7 @@ class ToolService:
     def _search_department_data(
         self,
         _db: Session,
-        _session: ChatSession,
+        _session: ConversationSession,
         raw_arguments: dict[str, Any],
     ) -> dict[str, Any]:
         arguments = DepartmentDataArguments.model_validate(raw_arguments)

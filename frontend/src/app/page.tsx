@@ -375,7 +375,7 @@ export default function HomePage() {
 
       const formData = new FormData();
       formData.append("name", name);
-      formData.append("external_id", role === "student" ? externalId : "");
+      formData.append("student_id", role === "student" ? externalId : "");
       formData.append("role", role);
       formData.append(
         "schedules",
