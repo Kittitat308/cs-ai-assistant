@@ -38,6 +38,7 @@ backend/.insightface/
 backend/models_cache/
 backend/models/*.bin
 backend/whisper.cpp/
+backend/openai-whisper/
 
 # ==========================================
 # Temporary audio / images
