@@ -22,7 +22,7 @@
 | Frontend | Next.js 16, React 19, TypeScript |
 | Backend | FastAPI, Python 3.11 |
 | Database | SQLite, SQLAlchemy |
-| Speech-to-Text | Thonburian Whisper Distilled Large + whisper.cpp server |
+| Speech-to-Text | Thonburian Whisper Distilled Medium + whisper.cpp server |
 | AI | Google Gemini API |
 | Text-to-Speech | Edge TTS |
 | Face Recognition | InsightFace + ONNX Runtime |
@@ -51,7 +51,7 @@ cs-ai-assistant/
 - Python 3.11
 - Node.js 20 ขึ้นไป
 - เว็บเบราว์เซอร์ที่อนุญาตการใช้กล้องและไมโครโฟน
-- `whisper-server` จาก whisper.cpp และโมเดล Thonburian Whisper Distilled Large
+- `whisper-server` จาก whisper.cpp และโมเดล Thonburian Whisper Distilled Medium
 - API key ของ [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 > การใช้กล้องและไมโครโฟนบนเครื่องอื่นควรเปิดเว็บผ่าน HTTPS ส่วน `localhost` สามารถใช้ระหว่างพัฒนาได้
@@ -88,7 +88,7 @@ DATABASE_PATH=data/cs_ai_assistant.db
 
 WHISPER_SERVER_URL=http://127.0.0.1:8178/inference
 WHISPER_SERVER_EXE=whisper.cpp/build/bin/whisper-server
-WHISPER_MODEL_PATH=models/distill-thonburian-large-v3-q5_0.bin
+WHISPER_MODEL_PATH=models/distill-thonburian-medium-q5_0.bin
 WHISPER_SERVER_HOST=127.0.0.1
 WHISPER_SERVER_PORT=8178
 WHISPER_THREADS=4

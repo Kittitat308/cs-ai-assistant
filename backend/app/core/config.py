@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Local Thonburian Whisper server
     whisper_server_url: str = "http://127.0.0.1:8178/inference"
     whisper_server_exe: str = "whisper.cpp/build/bin/whisper-server"
-    whisper_model_path: str = "models/distill-thonburian-large-v3-q5_0.bin"
+    whisper_model_path: str = "models/distill-thonburian-medium-q5_0.bin"
     whisper_server_host: str = "127.0.0.1"
     whisper_server_port: int = 8178
     whisper_threads: int = 4
