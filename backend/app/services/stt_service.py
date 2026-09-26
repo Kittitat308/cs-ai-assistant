@@ -121,7 +121,11 @@ class STTService:
             )
         return buffer.getvalue()
 
-    async def warm_up(self) -> None:
+    async def warm_up(
+        self,
+        audio_bytes: bytes | None = None,
+        filename: str = "warmup.wav",
+    ) -> None:
         """รอ server พร้อมและส่งเสียงเงียบหนึ่งครั้งเพื่อโหลด model เข้าหน่วยความจำ"""
 
         if not settings.whisper_warmup_on_start:
@@ -134,9 +138,9 @@ class STTService:
             remaining = deadline - time.monotonic()
             try:
                 await self.transcribe(
-                    self._silent_wav(),
-                    filename="warmup.wav",
-                    timeout_seconds=max(1.0, min(30.0, remaining)),
+                    audio_bytes or self._silent_wav(),
+                    filename=filename,
+                    timeout_seconds=max(1.0, remaining),
                 )
                 logger.info("Thonburian Whisper warm-up completed")
                 return

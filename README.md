@@ -124,6 +124,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ระบบจะสร้างไฟล์ `backend/data/cs_ai_assistant.db` และตารางที่จำเป็นให้อัตโนมัติ ไฟล์ฐานข้อมูลถูกละเว้นจาก Git เพราะมีข้อมูลส่วนบุคคลและ face embedding
 
+หากแยก Whisper และ Backend เป็น service คนละตัว ให้รัน warm-up หลัง Whisper พร้อมและก่อนเริ่ม Backend ด้วยคำสั่งนี้ แล้วตั้ง `WHISPER_WARMUP_ON_START=false` เพื่อไม่ให้ warm-up ซ้ำ:
+
+```powershell
+python scripts/warmup_whisper.py
+```
+
 ### 3. ตั้งค่าและติดตั้ง Frontend
 
 เปิด PowerShell อีกหน้าต่างหนึ่งจากโฟลเดอร์โปรเจกต์:
