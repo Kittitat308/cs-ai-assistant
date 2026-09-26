@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     face_model: str = "buffalo_l"
     face_detection_size: int = 640
     face_threshold: float = 0.45
+    ip_camera_url: str = "http://192.168.0.11:8080"
 
     # Admin API
     admin_token: str

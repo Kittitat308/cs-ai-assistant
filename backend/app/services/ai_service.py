@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.user import User
 from app.services.conversation_session_service import (
+    HISTORY_MESSAGE_LIMIT,
     ConversationMessage,
     ConversationSession,
     conversation_session_service,
@@ -188,9 +189,9 @@ class AIService:
     def get_history(
         _db: Session,
         session: ConversationSession,
-        limit: int = 8,
+        limit: int = HISTORY_MESSAGE_LIMIT,
     ) -> list[ConversationMessage]:
-        """ดึงบทสนทนา 8 ข้อความล่าสุด (4 รอบ) จาก memory"""
+        """ดึงบทสนทนา 6 ข้อความล่าสุด (3 รอบ) จาก memory"""
 
         return conversation_session_service.get_history(session, limit)
 

@@ -35,3 +35,8 @@ class FaceRecognitionResponse(BaseModel):
     similarity: float | None = None
 
     session_token: str | None = None
+
+    verify_user: bool = False
+    verify_fail_count: int = 0
+    verification_pending: bool = False
+    verification_failed: bool = False

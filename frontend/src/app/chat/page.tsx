@@ -26,6 +26,12 @@ type RecognizedUser = {
 };
 
 
+type CameraSource =
+  | "ip"
+  | "local"
+  | null;
+
+
 /* =========================================
    Config
 ========================================= */
@@ -61,6 +67,18 @@ export default function Home() {
 
   const cameraStreamRef =
     useRef<MediaStream | null>(null);
+
+  const ipCameraFrameRef =
+    useRef<Blob | null>(null);
+
+  const ipCameraFrameTimeRef =
+    useRef(0);
+
+  const ipCameraRequestRef =
+    useRef(false);
+
+  const ipCameraActiveRef =
+    useRef(false);
 
   const microphoneStreamRef =
     useRef<MediaStream | null>(null);
@@ -109,6 +127,9 @@ export default function Home() {
   const [cameraReady, setCameraReady] =
     useState(false);
 
+  const [cameraSource, setCameraSource] =
+    useState<CameraSource>(null);
+
   const [recognizedUser, setRecognizedUser] =
     useState<RecognizedUser | null>(null);
 
@@ -135,7 +156,78 @@ export default function Home() {
      Camera
   ========================================= */
 
-  async function startCamera() {
+  function updateIpCameraFrame(
+    image: Blob,
+  ) {
+    ipCameraFrameRef.current = image;
+    ipCameraFrameTimeRef.current = Date.now();
+  }
+
+
+  async function refreshIpCameraFrame():
+    Promise<boolean> {
+    if (ipCameraRequestRef.current) {
+      return ipCameraFrameRef.current !== null;
+    }
+
+    ipCameraRequestRef.current = true;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/face/camera/snapshot?t=${Date.now()}`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const image = await response.blob();
+
+      if (!image.type.startsWith("image/") || image.size === 0) {
+        return false;
+      }
+
+      updateIpCameraFrame(image);
+      return true;
+    } catch (error) {
+      console.warn("IP camera error:", error);
+      return false;
+    } finally {
+      ipCameraRequestRef.current = false;
+    }
+  }
+
+
+  function stopIpCamera() {
+    ipCameraActiveRef.current = false;
+    ipCameraFrameRef.current = null;
+    ipCameraFrameTimeRef.current = 0;
+  }
+
+
+  async function startIpCamera():
+    Promise<boolean> {
+    const opened =
+      await refreshIpCameraFrame();
+
+    if (!opened) {
+      stopIpCamera();
+      return false;
+    }
+
+    ipCameraActiveRef.current = true;
+    setCameraSource("ip");
+    setCameraReady(true);
+    setFaceStatus(
+      "กล้อง IP พร้อม กำลังตรวจสอบใบหน้า..."
+    );
+
+    return true;
+  }
+
+
+  async function startLocalCamera() {
 
     try {
 
@@ -160,6 +252,8 @@ export default function Home() {
       cameraStreamRef.current =
         stream;
 
+      setCameraSource("local");
+
 
       if (videoRef.current) {
 
@@ -171,7 +265,7 @@ export default function Home() {
         setCameraReady(true);
 
         setFaceStatus(
-          "กล้องพร้อม กำลังตรวจสอบใบหน้า..."
+          "กล้องเครื่องพร้อม กำลังตรวจสอบใบหน้า..."
         );
       }
 
@@ -189,12 +283,44 @@ export default function Home() {
   }
 
 
+  async function startCamera() {
+    const ipCameraOpened =
+      await startIpCamera();
+
+    if (!ipCameraOpened) {
+      await startLocalCamera();
+    }
+  }
+
+
   /* =========================================
      Capture camera frame
   ========================================= */
 
   async function captureFrame():
     Promise<Blob | null> {
+
+    if (ipCameraActiveRef.current) {
+      const frameIsFresh = (
+        ipCameraFrameRef.current !== null
+        && Date.now() - ipCameraFrameTimeRef.current < 1000
+      );
+
+      if (
+        frameIsFresh
+        || await refreshIpCameraFrame()
+      ) {
+        return ipCameraFrameRef.current;
+      }
+
+      stopIpCamera();
+      setCameraReady(false);
+      setFaceStatus(
+        "กล้อง IP ใช้งานไม่ได้ กำลังเปลี่ยนเป็นกล้องเครื่อง..."
+      );
+      await startLocalCamera();
+      return null;
+    }
 
     const video =
       videoRef.current;
@@ -365,11 +491,17 @@ export default function Home() {
         });
 
 
-        setFaceStatus(
-          `ยืนยันตัวตนแล้ว (${Math.round(
-            data.similarity * 100
-          )}%)`
-        );
+        if (data.verification_pending) {
+          setFaceStatus(
+            `ตรวจสอบผู้ใช้ไม่ผ่าน ${data.verify_fail_count}/3 ครั้ง`
+          );
+        } else {
+          setFaceStatus(
+            `ยืนยันตัวตนแล้ว (${Math.round(
+              data.similarity * 100
+            )}%)`
+          );
+        }
 
 
         return;
@@ -389,7 +521,9 @@ export default function Home() {
         );
 
         setFaceStatus(
-          data.claimed_name
+          data.verification_failed
+            ? "ยืนยันผู้ใช้ไม่สำเร็จ เปลี่ยนเป็นผู้ใช้ทั่วไป"
+            : data.claimed_name
             ? "จำชื่อจากบทสนทนาแล้ว แต่ยังไม่ยืนยันใบหน้า"
             : "ไม่รู้จักผู้ใช้นี้"
         );
@@ -831,6 +965,7 @@ export default function Home() {
     pushToTalkHeldRef.current = false;
     stopRecording();
     activeAudioRef.current?.pause();
+    stopIpCamera();
     cameraStreamRef.current
       ?.getTracks()
       .forEach(
@@ -1051,11 +1186,37 @@ export default function Home() {
 
             <video
               ref={videoRef}
-              className="camera"
               autoPlay
               muted
               playsInline
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                width: "1px",
+                height: "1px",
+                opacity: 0,
+                pointerEvents: "none",
+              }}
             />
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "100%",
+                height: "100%",
+                color: "#94a3b8",
+                textAlign: "center",
+                padding: "24px",
+              }}
+            >
+              {cameraSource === "ip"
+                ? "ระบบกำลังตรวจสอบใบหน้าจากกล้อง IP"
+                : cameraSource === "local"
+                  ? "ระบบกำลังตรวจสอบใบหน้าจากกล้องเครื่อง"
+                  : "กำลังเชื่อมต่อกล้อง"}
+            </div>
 
           </div>
 
