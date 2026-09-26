@@ -8,7 +8,6 @@ sqlalchemy
 # ใช้เฉพาะสคริปต์ย้ายข้อมูลเดิมจาก PostgreSQL ไป SQLite
 psycopg[binary]
 
-groq
 google-genai
 edge-tts
 

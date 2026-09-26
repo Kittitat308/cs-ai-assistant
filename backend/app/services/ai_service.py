@@ -25,6 +25,10 @@ from app.services.tool_service import tool_service
 logger = logging.getLogger(__name__)
 
 
+class GeminiRequestTimeoutError(RuntimeError):
+    """Gemini ใช้เวลาตอบเกินขีดจำกัดต่อ request"""
+
+
 class FunctionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +49,7 @@ class AIService:
     """จัดการ Gemini, conversation memory และ function-selection flow"""
 
     FALLBACK_RESPONSE = "ขออภัยครับ ระบบไม่สามารถประมวลผลคำตอบได้"
+    TIMEOUT_RESPONSE = "ระบบตอบกลับช้า กรุณาลองอีกครั้ง"
 
     NAME_PATTERNS = (
         re.compile(
@@ -87,7 +92,13 @@ class AIService:
     )
 
     def __init__(self):
-        self.client = genai.Client(api_key=settings.gemini_api_key)
+        self.client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(
+                timeout=int(settings.gemini_timeout_seconds * 1000),
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
 
     @classmethod
     def get_current_time_context(cls) -> str:
@@ -308,7 +319,13 @@ functions ที่ Backend อนุญาต:
             return self._parse_response(response.text)
 
         try:
-            return await asyncio.to_thread(_generate)
+            return await asyncio.wait_for(
+                asyncio.to_thread(_generate),
+                timeout=settings.gemini_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            logger.warning("Gemini request exceeded %.1f seconds", settings.gemini_timeout_seconds)
+            raise GeminiRequestTimeoutError from exc
         except (ValidationError, ValueError, TypeError, json.JSONDecodeError):
             logger.warning("Gemini returned an invalid JSON response")
         except Exception:
@@ -335,10 +352,13 @@ functions ที่ Backend อนุญาต:
             user_text,
         )
 
-        first_response = await self._request_gemini(
-            system_prompt,
-            contents,
-        )
+        try:
+            first_response = await self._request_gemini(
+                system_prompt,
+                contents,
+            )
+        except GeminiRequestTimeoutError:
+            return self.TIMEOUT_RESPONSE
 
         if first_response is None:
             return self.FALLBACK_RESPONSE
@@ -380,10 +400,13 @@ functions ที่ Backend อนุญาต:
             ),
         ]
 
-        final_response = await self._request_gemini(
-            system_prompt,
-            second_contents,
-        )
+        try:
+            final_response = await self._request_gemini(
+                system_prompt,
+                second_contents,
+            )
+        except GeminiRequestTimeoutError:
+            return self.TIMEOUT_RESPONSE
 
         if final_response is None:
             return self.FALLBACK_RESPONSE

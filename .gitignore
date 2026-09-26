@@ -36,6 +36,8 @@ dist/
 .insightface/
 backend/.insightface/
 backend/models_cache/
+backend/models/*.bin
+backend/whisper.cpp/
 
 # ==========================================
 # Temporary audio / images

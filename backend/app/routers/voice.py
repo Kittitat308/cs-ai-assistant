@@ -15,7 +15,7 @@ from app.services.ai_service import ai_service
 from app.services.conversation_session_service import (
     conversation_session_service,
 )
-from app.services.stt_service import stt_service
+from app.services.stt_service import STTTimeoutError, stt_service
 from app.services.tts_service import tts_service
 
 
@@ -36,7 +36,7 @@ async def converse(
 
     Audio
       ↓
-    Groq STT
+    Local Thonburian Whisper STT
       ↓
     Gemini
       ↓
@@ -70,10 +70,22 @@ async def converse(
     # Speech-to-Text
     # -----------------------------------------
 
-    user_text = await stt_service.transcribe(
-        audio_bytes,
-        filename=audio.filename or "audio.webm",
-    )
+    try:
+        user_text = await stt_service.transcribe(
+            audio_bytes,
+            filename=audio.filename or "audio.webm",
+        )
+    except STTTimeoutError:
+        assistant_text = "ขอโทษครับ คุณพูดว่าอะไรนะ"
+        mp3_bytes = await tts_service.synthesize(assistant_text)
+        return {
+            "user_text": "",
+            "assistant_text": assistant_text,
+            "audio": base64.b64encode(mp3_bytes).decode("ascii"),
+            "audio_mime_type": "audio/mpeg",
+            "claimed_name": session.claimed_name,
+            "session_token": session.token,
+        }
 
     if not user_text:
         raise HTTPException(

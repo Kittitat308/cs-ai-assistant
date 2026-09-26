@@ -16,6 +16,7 @@ from app.services.ai_service import (  # noqa: E402
     AIResponse,
     AIService,
     FunctionRequest,
+    GeminiRequestTimeoutError,
 )
 from app.services.tool_service import tool_service  # noqa: E402
 
@@ -44,6 +45,12 @@ class StubAIService(AIService):
     async def _request_gemini(self, system_prompt, contents):
         self.request_count += 1
         return self.responses.pop(0)
+
+
+class TimeoutAIService(StubAIService):
+    async def _request_gemini(self, system_prompt, contents):
+        self.request_count += 1
+        raise GeminiRequestTimeoutError
 
 
 class AIArchitectureTests(unittest.TestCase):
@@ -119,6 +126,20 @@ class AIArchitectureTests(unittest.TestCase):
 
         self.assertEqual(reply, service.FALLBACK_RESPONSE)
         self.assertEqual(service.request_count, 2)
+
+    def test_gemini_timeout_returns_timeout_message(self):
+        service = TimeoutAIService([])
+
+        reply = asyncio.run(
+            service.generate_reply(
+                object(),
+                SimpleNamespace(id=1, user_id=None),
+                "ทดสอบ timeout",
+            )
+        )
+
+        self.assertEqual(reply, service.TIMEOUT_RESPONSE)
+        self.assertEqual(service.request_count, 1)
 
     def test_invalid_json_is_rejected(self):
         with self.assertRaises(ValidationError):

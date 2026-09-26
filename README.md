@@ -5,11 +5,11 @@
 ## ความสามารถหลัก
 
 - สนทนาด้วยเสียงผ่านหน้าเว็บ โดยแสดงข้อความที่ผู้ใช้พูดและคำตอบของ AI
-- แปลงเสียงเป็นข้อความด้วย Groq Whisper และสร้างคำตอบด้วย Gemini
+- แปลงเสียงเป็นข้อความด้วย Thonburian Whisper ที่รันในเครื่อง และสร้างคำตอบด้วย Gemini
 - อ่านคำตอบภาษาไทยผ่านลำโพงด้วย Edge TTS
 - ตรวจจับและจดจำใบหน้าด้วย InsightFace
 - รู้จักผู้ใช้ว่าเป็นอาจารย์ นักศึกษา หรือผู้ใช้ทั่วไป
-- จำชื่อและประวัติ 4 รอบถาม–ตอบล่าสุดภายใน session ปัจจุบันในหน่วยความจำของ Python
+- จำชื่อและประวัติ 3 รอบถาม–ตอบล่าสุดภายใน session ปัจจุบันในหน่วยความจำของ Python
 - ลงทะเบียนผู้ใช้พร้อมใบหน้าแบบ transaction เดียว หากทำไม่ครบจะไม่บันทึกข้อมูล
 - ตรวจสอบรหัสนักศึกษา 10 หลักไม่ให้ซ้ำ
 - เพิ่มตารางเรียนแบบหนึ่งรายวิชามีหลายวันหรือหลายช่วงเวลาได้
@@ -22,7 +22,7 @@
 | Frontend | Next.js 16, React 19, TypeScript |
 | Backend | FastAPI, Python 3.11 |
 | Database | SQLite, SQLAlchemy |
-| Speech-to-Text | Groq API (`whisper-large-v3-turbo`) |
+| Speech-to-Text | Thonburian Whisper Distilled Large + whisper.cpp server |
 | AI | Google Gemini API |
 | Text-to-Speech | Edge TTS |
 | Face Recognition | InsightFace + ONNX Runtime |
@@ -51,7 +51,7 @@ cs-ai-assistant/
 - Python 3.11
 - Node.js 20 ขึ้นไป
 - เว็บเบราว์เซอร์ที่อนุญาตการใช้กล้องและไมโครโฟน
-- API key ของ [Groq](https://console.groq.com/keys)
+- `whisper-server` จาก whisper.cpp และโมเดล Thonburian Whisper Distilled Large
 - API key ของ [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 > การใช้กล้องและไมโครโฟนบนเครื่องอื่นควรเปิดเว็บผ่าน HTTPS ส่วน `localhost` สามารถใช้ระหว่างพัฒนาได้
@@ -86,11 +86,19 @@ FRONTEND_URL=http://localhost:3000
 
 DATABASE_PATH=data/cs_ai_assistant.db
 
-GROQ_API_KEY=ใส่_Groq_API_Key
-GROQ_STT_MODEL=whisper-large-v3-turbo
+WHISPER_SERVER_URL=http://127.0.0.1:8178/inference
+WHISPER_SERVER_EXE=whisper.cpp/build/bin/whisper-server
+WHISPER_MODEL_PATH=models/distill-thonburian-large-v3-q5_0.bin
+WHISPER_SERVER_HOST=127.0.0.1
+WHISPER_SERVER_PORT=8178
+WHISPER_THREADS=4
+WHISPER_WARMUP_ON_START=true
+WHISPER_WARMUP_TIMEOUT_SECONDS=180
+STT_TIMEOUT_SECONDS=6
 
 GEMINI_API_KEY=ใส่_Gemini_API_Key
 GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_TIMEOUT_SECONDS=6
 
 TTS_VOICE=th-TH-NiwatNeural
 FACE_MODEL=buffalo_l
@@ -100,7 +108,13 @@ FACE_THRESHOLD=0.45
 ADMIN_TOKEN=เปลี่ยนเป็นข้อความสุ่มที่ยาวและคาดเดายาก
 ```
 
-เปิด Backend:
+เปิด Thonburian Whisper server ก่อน (บน Linux/macOS ใช้ชื่อ binary `whisper-server` ส่วน Windows ให้กำหนด `WHISPER_SERVER_EXE` เป็นไฟล์ `.exe`):
+
+```powershell
+python scripts/run_whisper_server.py
+```
+
+จากนั้นเปิด Backend อีก terminal หนึ่ง ระบบจะ warm-up Whisper อัตโนมัติก่อนรับ request:
 
 ```powershell
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

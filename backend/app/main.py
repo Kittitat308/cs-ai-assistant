@@ -16,6 +16,7 @@ from app.routers import (
     rooms,
     voice,
 )
+from app.services.stt_service import stt_service
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     """
 
     Base.metadata.create_all(bind=engine)
+    await stt_service.warm_up()
 
     yield
 
