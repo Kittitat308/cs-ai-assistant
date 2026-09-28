@@ -12,7 +12,7 @@ class FaceService:
     """
     จัดการ Face Detection + Face Recognition
 
-    InsightFace buffalo_l ประกอบด้วย model ที่ใช้
+    InsightFace buffalo_m ประกอบด้วย model ที่ใช้
     detection และ ArcFace recognition
     """
 
@@ -74,6 +74,42 @@ class FaceService:
 
         return image
 
+    @classmethod
+    def prepare_camera_image(
+        cls,
+        image_bytes: bytes,
+        rotation: str = "none",
+        enhance: bool = False,
+    ) -> np.ndarray:
+        """จัดแนวภาพกล้องและเพิ่มความสว่างเฉพาะภาพที่มืดมาก."""
+
+        image = cls.decode_image(image_bytes)
+        rotations = {
+            "none": None,
+            "cw": cv2.ROTATE_90_CLOCKWISE,
+            "ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+            "180": cv2.ROTATE_180,
+        }
+
+        if rotation not in rotations:
+            raise ValueError("INVALID_ROTATION")
+
+        rotate_code = rotations[rotation]
+        if rotate_code is not None:
+            image = cv2.rotate(image, rotate_code)
+
+        if enhance and float(image.mean()) < 70.0:
+            gamma_lut = np.array(
+                [
+                    min(255, ((value / 255.0) ** 0.45) * 255)
+                    for value in range(256)
+                ],
+                dtype=np.uint8,
+            )
+            image = cv2.LUT(image, gamma_lut)
+
+        return image
+
     def get_single_face_embedding(
         self,
         image_bytes: bytes,
@@ -108,10 +144,16 @@ class FaceService:
     def get_primary_face_embedding(
         self,
         image_bytes: bytes,
+        rotation: str = "none",
+        enhance: bool = False,
     ) -> np.ndarray:
         """เลือกใบหน้าที่มีกรอบใหญ่ที่สุดสำหรับการรู้จำหน้ากล้อง"""
 
-        image = self.decode_image(image_bytes)
+        image = self.prepare_camera_image(
+            image_bytes,
+            rotation=rotation,
+            enhance=enhance,
+        )
         faces = self.app.get(image)
 
         if len(faces) == 0:
@@ -132,6 +174,26 @@ class FaceService:
             primary_face.normed_embedding,
             dtype=np.float32,
         )
+
+    def detect_face_count(
+        self,
+        image_bytes: bytes,
+        rotation: str = "none",
+        enhance: bool = False,
+    ) -> int:
+        """ตรวจเฉพาะใบหน้าด้วย detector โดยไม่รัน recognition model."""
+
+        image = self.prepare_camera_image(
+            image_bytes,
+            rotation=rotation,
+            enhance=enhance,
+        )
+        bounding_boxes, _keypoints = self.app.det_model.detect(
+            image,
+            max_num=0,
+            metric="default",
+        )
+        return len(bounding_boxes)
 
     @staticmethod
     def cosine_similarity(
@@ -162,13 +224,17 @@ class FaceService:
         self,
         db: Session,
         image_bytes: bytes,
+        rotation: str = "none",
+        enhance: bool = False,
     ):
         """
-        เปรียบเทียบใบหน้ากับ SQLite และคืน embedding สำหรับติดตาม Guest
+        เปรียบเทียบใบหน้ากับ PostgreSQL และคืน embedding สำหรับติดตาม Guest
         """
 
         input_embedding = self.get_primary_face_embedding(
-            image_bytes
+            image_bytes,
+            rotation=rotation,
+            enhance=enhance,
         )
 
         stored_faces = db.query(FaceEmbedding).all()

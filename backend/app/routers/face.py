@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.user import User
 from app.services.face_service import face_service
 from app.services.ip_camera_service import IPCameraError, ip_camera_service
 from app.services.conversation_session_service import (
@@ -48,6 +47,8 @@ async def get_ip_camera_snapshot():
 @router.post("/recognize")
 async def recognize_face(
     image: UploadFile = File(...),
+    rotation: str = Form("none"),
+    enhance: bool = Form(False),
 
     # frontend ส่ง token เดิมกลับมาได้
     # เพื่อไม่ต้องสร้าง session ใหม่ทุก 2 วินาที
@@ -65,42 +66,14 @@ async def recognize_face(
         user, similarity, embedding = face_service.recognize_with_embedding(
             db,
             image_bytes,
+            rotation=rotation,
+            enhance=enhance,
         )
 
     except ValueError as error:
         error_code = str(error)
 
         if error_code == "NO_FACE":
-            session = conversation_session_service.resolve_no_face_session(
-                session_token
-            )
-
-            if session is not None and session.user_id is not None:
-                verified_user = db.get(User, session.user_id)
-
-                if verified_user is not None:
-                    return {
-                        "status": "recognized",
-                        "recognized": True,
-                        "user_id": verified_user.id,
-                        "name": verified_user.name,
-                        "role": verified_user.role,
-                        "session_token": session.token,
-                        "verify_user": session.verify_user,
-                        "verify_fail_count": session.verify_fail_count,
-                        "verification_pending": True,
-                    }
-
-            if session is not None:
-                return {
-                    "status": "unknown",
-                    "recognized": False,
-                    "session_token": session.token,
-                    "verify_user": False,
-                    "verify_fail_count": 0,
-                    "verification_failed": True,
-                }
-
             return {
                 "status": "no_face",
                 "recognized": False,
@@ -123,32 +96,12 @@ async def recognize_face(
             face_threshold=settings.face_threshold,
         )
 
-        if session.user_id is not None:
-            verified_user = db.get(User, session.user_id)
-
-            if verified_user is not None:
-                return {
-                    "status": "recognized",
-                    "recognized": True,
-                    "user_id": verified_user.id,
-                    "name": verified_user.name,
-                    "role": verified_user.role,
-                    "similarity": similarity,
-                    "session_token": session.token,
-                    "verify_user": session.verify_user,
-                    "verify_fail_count": session.verify_fail_count,
-                    "verification_pending": True,
-                }
-
         return {
             "status": "unknown",
             "recognized": False,
             "similarity": similarity,
             "session_token": session.token,
             "claimed_name": session.claimed_name,
-            "verify_user": session.verify_user,
-            "verify_fail_count": session.verify_fail_count,
-            "verification_failed": session.verification_failed,
         }
 
     # ------------------------------------------
@@ -163,34 +116,6 @@ async def recognize_face(
         face_threshold=settings.face_threshold,
     )
 
-    if session.user_id != user.id:
-        if session.user_id is not None:
-            verified_user = db.get(User, session.user_id)
-
-            if verified_user is not None:
-                return {
-                    "status": "recognized",
-                    "recognized": True,
-                    "user_id": verified_user.id,
-                    "name": verified_user.name,
-                    "role": verified_user.role,
-                    "similarity": similarity,
-                    "session_token": session.token,
-                    "verify_user": session.verify_user,
-                    "verify_fail_count": session.verify_fail_count,
-                    "verification_pending": True,
-                }
-
-        return {
-            "status": "unknown",
-            "recognized": False,
-            "similarity": similarity,
-            "session_token": session.token,
-            "verify_user": False,
-            "verify_fail_count": 0,
-            "verification_failed": session.verification_failed,
-        }
-
     return {
         "status": "recognized",
         "recognized": True,
@@ -202,7 +127,40 @@ async def recognize_face(
         "similarity": similarity,
 
         "session_token": session.token,
-        "verify_user": session.verify_user,
-        "verify_fail_count": session.verify_fail_count,
-        "verification_pending": session.verify_fail_count > 0,
     }
+
+
+@router.post("/detect")
+async def detect_face(
+    image: UploadFile = File(...),
+    rotation: str = Form("none"),
+    enhance: bool = Form(False),
+):
+    """ตรวจเฉพาะว่ามีใบหน้าหรือไม่ โดยไม่รัน ArcFace recognition."""
+
+    image_bytes = await image.read()
+
+    try:
+        face_count = await asyncio.to_thread(
+            face_service.detect_face_count,
+            image_bytes,
+            rotation,
+            enhance,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    return {
+        "status": "detected" if face_count > 0 else "no_face",
+        "face_detected": face_count > 0,
+        "face_count": face_count,
+    }
+
+
+@router.post("/session/end")
+async def end_face_session(session_token: str = Form(...)):
+    conversation_session_service.delete_session(session_token)
+    return {"status": "ended"}

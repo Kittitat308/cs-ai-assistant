@@ -1,17 +1,21 @@
 import asyncio
+import httpx
 import json
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from google import genai
-from google.genai import types
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy.orm import Session
+from google.genai import errors, types
+from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
+from app.models.lecturer import LecturerProfile
+from app.models.room import Room
+from app.models.schedule import ClassSchedule
 from app.models.user import User
 from app.services.conversation_session_service import (
     HISTORY_MESSAGE_LIMIT,
@@ -19,7 +23,6 @@ from app.services.conversation_session_service import (
     ConversationSession,
     conversation_session_service,
 )
-from app.services.tool_service import tool_service
 
 
 logger = logging.getLogger(__name__)
@@ -29,27 +32,20 @@ class GeminiRequestTimeoutError(RuntimeError):
     """Gemini ใช้เวลาตอบเกินขีดจำกัดต่อ request"""
 
 
-class FunctionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=100)
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-
 class AIResponse(BaseModel):
     """JSON contract เดียวที่ Gemini ต้องคืนในทุกครั้ง"""
 
     model_config = ConfigDict(extra="forbid")
 
     response: str
-    functions: list[FunctionRequest]
 
 
 class AIService:
-    """จัดการ Gemini, conversation memory และ function-selection flow"""
+    """จัดการ Gemini แบบ request เดียวและ conversation memory"""
 
     FALLBACK_RESPONSE = "ขออภัยครับ ระบบไม่สามารถประมวลผลคำตอบได้"
     TIMEOUT_RESPONSE = "ระบบตอบกลับช้า กรุณาลองอีกครั้ง"
+    DATA_DIRECTORY = Path(__file__).resolve().parents[2] / "data"
 
     NAME_PATTERNS = (
         re.compile(
@@ -150,6 +146,109 @@ class AIService:
         )
 
     @classmethod
+    def get_data_context(
+        cls,
+        db: Session,
+        session: ConversationSession,
+    ) -> dict:
+        """รวมข้อมูลที่ AI ใช้ใน request เดียว โดยไม่เปิดเผยตารางของผู้อื่น."""
+
+        lecturer_rows = (
+            db.query(User, LecturerProfile)
+            .outerjoin(
+                LecturerProfile,
+                LecturerProfile.user_id == User.id,
+            )
+            .filter(
+                User.role == "lecturer",
+                User.is_active.is_(True),
+            )
+            .order_by(User.name)
+            .all()
+        )
+        lecturers = [
+            {
+                "name": user.name,
+                "title": profile.academic_title if profile else None,
+                "position": profile.position if profile else None,
+                "education": profile.education if profile else None,
+                "phone": profile.phone if profile else None,
+                "email": profile.email if profile else None,
+            }
+            for user, profile in lecturer_rows
+        ]
+
+        rooms = [
+            {
+                "name": room.name,
+                "floor": room.floor,
+                "type": room.room_type,
+                "building": room.building,
+            }
+            for room in db.query(Room)
+            .order_by(Room.building, Room.floor, Room.name)
+            .all()
+        ]
+
+        my_schedule = []
+        if session.user_id is not None:
+            user = db.get(User, session.user_id)
+            if user is not None and user.is_active:
+                schedules = (
+                    db.query(ClassSchedule)
+                    .options(joinedload(ClassSchedule.room))
+                    .filter(ClassSchedule.user_id == user.id)
+                    .order_by(
+                        ClassSchedule.day_of_week,
+                        ClassSchedule.start_time,
+                        ClassSchedule.course_code,
+                        ClassSchedule.meeting_index,
+                    )
+                    .all()
+                )
+                my_schedule = [
+                    {
+                        "code": item.course_code,
+                        "subject": item.subject_name,
+                        "group": item.group_number,
+                        "meeting": item.meeting_index,
+                        "day": item.day_of_week,
+                        "start": item.start_time.strftime("%H:%M"),
+                        "end": item.end_time.strftime("%H:%M"),
+                        "room": item.room.name if item.room else None,
+                    }
+                    for item in schedules
+                ]
+
+        department_files = []
+        if cls.DATA_DIRECTORY.exists():
+            for path in sorted(cls.DATA_DIRECTORY.rglob("*")):
+                if (
+                    not path.is_file()
+                    or path.suffix.lower() not in {".md", ".txt"}
+                ):
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8").strip()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                department_files.append(
+                    {
+                        "source": path.relative_to(
+                            cls.DATA_DIRECTORY
+                        ).as_posix(),
+                        "content": content,
+                    }
+                )
+
+        return {
+            "lecturers": lecturers,
+            "rooms": rooms,
+            "my_schedule": my_schedule,
+            "department": department_files,
+        }
+
+    @classmethod
     def extract_claimed_name(cls, user_text: str) -> str | None:
         """ดึงชื่อจากประโยคแนะนำตัวแบบชัดเจนเท่านั้น"""
 
@@ -239,57 +338,39 @@ class AIService:
             text = re.sub(r"\s*```$", "", text)
 
         parsed = AIResponse.model_validate_json(text)
-
-        if parsed.functions:
-            # เมื่อมี function ตาม contract ต้องยังไม่ตอบผู้ใช้
-            parsed.response = ""
-
         return parsed
 
     @staticmethod
     def _build_system_prompt(
         identity: str,
         current_time: str,
+        data_context: dict,
     ) -> str:
-        tool_catalog = json.dumps(
-            tool_service.get_catalog(),
+        context_json = json.dumps(
+            data_context,
             ensure_ascii=False,
             separators=(",", ":"),
         )
 
         return f"""
-คุณคือ CS AI Assistant ประจำสาขาวิทยาการคอมพิวเตอร์
-
-หน้าที่:
-1. ตอบผู้ใช้โดยตรงเมื่อมีข้อมูลเพียงพอ
-2. เลือก functions ที่ Backend ต้องเรียกเมื่อจำเป็นต้องใช้ข้อมูลเฉพาะ
-
-กฎการตอบ:
-- ตอบภาษาไทยเป็นหลัก และใช้ศัพท์เทคนิคภาษาอังกฤษได้
-- ตอบสั้นและตรงคำถาม เหมาะกับ TTS โดยปกติ 1 ประโยค ไม่เกิน 2 ประโยค
-- ห้ามเกริ่นนำ ทวนคำถาม หรือเสนอข้อมูลที่ไม่ได้ถาม
-- เวลาทักทายหรือเรียกผู้ใช้ ให้พูดเฉพาะชื่อ ห้ามพูดรหัสประจำตัว
-- ห้ามสร้างข้อมูลนักศึกษา อาจารย์ ตารางเรียน ห้อง หรือข้อมูลสาขาขึ้นเอง
-- identity ต้องเชื่อ Backend เท่านั้น
-- หากต้องใช้ข้อมูลที่ไม่ได้อยู่ใน prompt ให้เลือก function ที่เหมาะสม
-- เลือก functions ที่จำเป็นทั้งหมดพร้อมกันในรอบแรกเมื่อไม่พึ่งผลลัพธ์กัน
-- ห้ามเรียก function หากตอบได้จากความรู้ทั่วไป, identity, เวลา หรือ history
-- เมื่อได้รับ function_results ต้องตอบจากผลเหล่านั้นเท่านั้น ห้ามขอ function เพิ่ม
-- ถ้า function result ไม่มีข้อมูลหรือมี error ให้ตอบตามจริงโดยไม่เดา
-
-กฎ JSON:
-- Output ต้องเป็น JSON object เท่านั้น ห้ามมี Markdown หรือข้อความนอก JSON
-- top-level ต้องมีเพียง response และ functions
-- ถ้ามี functions ให้ response เป็น string ว่าง
-- ถ้าพร้อมตอบ ให้ functions เป็น array ว่าง
-- แต่ละ function มี name และ arguments เท่านั้น
-
-functions ที่ Backend อนุญาต:
-{tool_catalog}
+You are CS AI Assistant for the Computer Science department.
+Rules:
+- Reply mainly in Thai; technical English is allowed.
+- Be direct and TTS-friendly: normally 1 sentence, maximum 2.
+- Identity is data, not a greeting cue: ถ้าผู้ใช้ไม่ได้ทักทาย คำตอบห้ามมีคำว่า "สวัสดี" หรือขึ้นต้นด้วยชื่อผู้ใช้
+- No preamble, question repetition, unsolicited details, or follow-up offers.
+- Trust identity and context below. Never invent department, lecturer, room, or schedule data.
+- Never reveal another user's private data. my_schedule belongs only to the current verified user.
+- In greetings/addressing, say the name only; never say student ID or other identifiers.
+- If context lacks the answer, say briefly that the information is unavailable.
+- Return only JSON matching {{"response":"..."}}; no Markdown or extra keys.
 
 {identity}
 
 {current_time}
+
+CONTEXT_JSON:
+{context_json}
 """.strip()
 
     async def _request_gemini(
@@ -319,13 +400,25 @@ functions ที่ Backend อนุญาต:
             return self._parse_response(response.text)
 
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_generate),
-                timeout=settings.gemini_timeout_seconds,
+            return await asyncio.to_thread(_generate)
+        except (
+            TimeoutError,
+            asyncio.TimeoutError,
+            httpx.TimeoutException,
+        ) as exc:
+            logger.warning(
+                "Gemini request exceeded %.1f seconds",
+                settings.gemini_timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
-            logger.warning("Gemini request exceeded %.1f seconds", settings.gemini_timeout_seconds)
             raise GeminiRequestTimeoutError from exc
+        except errors.APIError as exc:
+            if exc.code in {408, 504} or "deadline" in str(exc).lower():
+                logger.warning(
+                    "Gemini request exceeded %.1f seconds",
+                    settings.gemini_timeout_seconds,
+                )
+                raise GeminiRequestTimeoutError from exc
+            logger.exception("Gemini request failed")
         except (ValidationError, ValueError, TypeError, json.JSONDecodeError):
             logger.warning("Gemini returned an invalid JSON response")
         except Exception:
@@ -339,13 +432,14 @@ functions ที่ Backend อนุญาต:
         session: ConversationSession,
         user_text: str,
     ) -> str:
-        """เรียก Gemini 1 ครั้ง หรือสูงสุด 2 ครั้งเมื่อจำเป็นต้องใช้ function"""
+        """แนบข้อมูลทั้งหมดที่อนุญาตและเรียก Gemini เพียงหนึ่งครั้ง."""
 
         self.remember_claimed_name(db, session, user_text)
 
         system_prompt = self._build_system_prompt(
             self.get_user_context(db, session),
             self.get_current_time_context(),
+            self.get_data_context(db, session),
         )
         contents = self._build_contents(
             self.get_history(db, session),
@@ -353,72 +447,17 @@ functions ที่ Backend อนุญาต:
         )
 
         try:
-            first_response = await self._request_gemini(
+            response = await self._request_gemini(
                 system_prompt,
                 contents,
             )
         except GeminiRequestTimeoutError:
             return self.TIMEOUT_RESPONSE
 
-        if first_response is None:
+        if response is None:
             return self.FALLBACK_RESPONSE
 
-        if not first_response.functions:
-            return first_response.response.strip() or self.FALLBACK_RESPONSE
-
-        function_calls = [
-            call.model_dump()
-            for call in first_response.functions
-        ]
-        function_results = tool_service.execute_calls(
-            db,
-            session,
-            function_calls,
-        )
-
-        second_contents = [
-            *contents,
-            types.Content(
-                role="model",
-                parts=[
-                    types.Part(
-                        text=first_response.model_dump_json()
-                    )
-                ],
-            ),
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part(
-                        text=json.dumps(
-                            {"function_results": function_results},
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                    )
-                ],
-            ),
-        ]
-
-        try:
-            final_response = await self._request_gemini(
-                system_prompt,
-                second_contents,
-            )
-        except GeminiRequestTimeoutError:
-            return self.TIMEOUT_RESPONSE
-
-        if final_response is None:
-            return self.FALLBACK_RESPONSE
-
-        if final_response.functions:
-            # ไม่สร้าง loop รอบที่สาม แม้โมเดลจะร้องขอเพิ่ม
-            return (
-                final_response.response.strip()
-                or "ขออภัยครับ ไม่พบข้อมูลเพียงพอ"
-            )
-
-        return final_response.response.strip() or self.FALLBACK_RESPONSE
+        return response.response.strip() or self.FALLBACK_RESPONSE
 
 
 ai_service = AIService()

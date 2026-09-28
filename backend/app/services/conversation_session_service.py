@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 
 HISTORY_MESSAGE_LIMIT = 6
+# Safety cleanup for abandoned browser sessions. The active 10-second session
+# is ended explicitly by the frontend after TTS has finished.
 SESSION_TTL = timedelta(hours=2)
-VERIFIED_ROLES = {"student", "lecturer"}
-VERIFY_FAILURE_LIMIT = 3
 
 
 @dataclass(slots=True)
@@ -24,9 +24,6 @@ class ConversationSession:
     user_role: str | None = None
     claimed_name: str | None = None
     face_embedding: tuple[float, ...] | None = None
-    verify_user: bool = False
-    verify_fail_count: int = 0
-    verification_failed: bool = False
     history: list[ConversationMessage] = field(default_factory=list)
     last_seen_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -53,38 +50,6 @@ class ConversationSessionService:
             current = self._sessions.get(token or "")
 
             if current is not None:
-                if current.verify_user:
-                    same_verified_user = (
-                        user_id is not None
-                        and current.user_id == user_id
-                    )
-                    different_verified_user = (
-                        user_id is not None
-                        and current.user_id != user_id
-                        and user_role in VERIFIED_ROLES
-                    )
-
-                    if same_verified_user:
-                        current.verify_fail_count = 0
-                        current.last_seen_at = datetime.utcnow()
-
-                        if face_embedding is not None:
-                            current.face_embedding = tuple(face_embedding)
-
-                        return current
-
-                    if different_verified_user:
-                        return self._create(
-                            user_id=user_id,
-                            user_role=user_role,
-                            face_embedding=face_embedding,
-                        )
-
-                    return self._register_verification_failure(
-                        current,
-                        face_embedding=face_embedding,
-                    )
-
                 same_known_user = (
                     user_id is not None
                     and current.user_id == user_id
@@ -101,8 +66,6 @@ class ConversationSessionService:
 
                 if same_known_user or same_guest:
                     current.last_seen_at = datetime.utcnow()
-                    current.verification_failed = False
-
                     if face_embedding is not None:
                         current.face_embedding = tuple(face_embedding)
 
@@ -113,21 +76,6 @@ class ConversationSessionService:
                 user_role=user_role,
                 face_embedding=face_embedding,
             )
-
-    def resolve_no_face_session(
-        self,
-        token: str | None,
-    ) -> ConversationSession | None:
-        """นับ no-face เฉพาะ session นักศึกษา/อาจารย์ที่กำลัง verify."""
-
-        with self._lock:
-            self._cleanup()
-            current = self._sessions.get(token or "")
-
-            if current is None or not current.verify_user:
-                return None
-
-            return self._register_verification_failure(current)
 
     def get_or_create_for_voice(self, token: str) -> ConversationSession:
         """token ที่หายหลัง reset/restart ต้องไม่ทำให้ voice pipeline หยุด"""
@@ -174,13 +122,21 @@ class ConversationSessionService:
         with self._lock:
             return list(session.history[-limit:])
 
+    def delete_session(self, token: str | None) -> None:
+        """ลบ session เมื่อเวลาหน้ากล้องครบกำหนด."""
+
+        if not token:
+            return
+
+        with self._lock:
+            self._sessions.pop(token.strip()[:128], None)
+
     def _create(
         self,
         user_id: int | None,
         token: str | None = None,
         user_role: str | None = None,
         face_embedding: list[float] | tuple[float, ...] | None = None,
-        verification_failed: bool = False,
     ) -> ConversationSession:
         session_token = token or uuid.uuid4().hex
         session = ConversationSession(
@@ -192,33 +148,9 @@ class ConversationSessionService:
                 if face_embedding is not None
                 else None
             ),
-            verify_user=(
-                user_id is not None
-                and user_role in VERIFIED_ROLES
-            ),
-            verification_failed=verification_failed,
         )
         self._sessions[session_token] = session
         return session
-
-    def _register_verification_failure(
-        self,
-        current: ConversationSession,
-        face_embedding: list[float] | tuple[float, ...] | None = None,
-    ) -> ConversationSession:
-        current.verify_fail_count += 1
-        current.last_seen_at = datetime.utcnow()
-
-        if current.verify_fail_count < VERIFY_FAILURE_LIMIT:
-            return current
-
-        current.verify_user = False
-
-        return self._create(
-            user_id=None,
-            face_embedding=face_embedding,
-            verification_failed=True,
-        )
 
     @staticmethod
     def _same_face(

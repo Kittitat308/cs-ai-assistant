@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+RUN_PATH=$(readlink -f -- "$0")
+BACKEND_DIR=$(CDPATH= cd -- "$(dirname -- "$RUN_PATH")" && pwd)
+
+if [ ! -x "$BACKEND_DIR/.venv/bin/python" ]; then
+    python3 -m venv "$BACKEND_DIR/.venv"
+    "$BACKEND_DIR/.venv/bin/python" -m pip install --upgrade pip
+    "$BACKEND_DIR/.venv/bin/python" -m pip install -r "$BACKEND_DIR/requirements.txt"
+fi
+
+exec "$BACKEND_DIR/.venv/bin/python" "$BACKEND_DIR/scripts/run_backend.py"

@@ -1,11 +1,11 @@
 # CS AI Assistant
 
-เว็บแอปผู้ช่วย AI สำหรับสาขาวิทยาการคอมพิวเตอร์ รองรับการสนทนาด้วยเสียง การจดจำใบหน้า การระบุตัวตนผู้ใช้ และการนำข้อมูลจาก SQLite เช่น ข้อมูลผู้ใช้และตารางเรียน มาใช้ตอบคำถาม
+เว็บแอปผู้ช่วย AI สำหรับสาขาวิทยาการคอมพิวเตอร์ รองรับการสนทนาด้วยเสียง การจดจำใบหน้า การระบุตัวตนผู้ใช้ และการนำข้อมูลจาก PostgreSQL เช่น ข้อมูลผู้ใช้และตารางเรียน มาใช้ตอบคำถาม
 
 ## ความสามารถหลัก
 
 - สนทนาด้วยเสียงผ่านหน้าเว็บ โดยแสดงข้อความที่ผู้ใช้พูดและคำตอบของ AI
-- แปลงเสียงเป็นข้อความด้วย Thonburian Whisper ที่รันในเครื่อง และสร้างคำตอบด้วย Gemini
+- แปลงเสียงเป็นข้อความด้วย Groq Whisper Large V3 และสร้างคำตอบด้วย Gemini
 - อ่านคำตอบภาษาไทยผ่านลำโพงด้วย Edge TTS
 - ตรวจจับและจดจำใบหน้าด้วย InsightFace
 - รู้จักผู้ใช้ว่าเป็นอาจารย์ นักศึกษา หรือผู้ใช้ทั่วไป
@@ -21,8 +21,8 @@
 |---|---|
 | Frontend | Next.js 16, React 19, TypeScript |
 | Backend | FastAPI, Python 3.11 |
-| Database | SQLite, SQLAlchemy |
-| Speech-to-Text | Thonburian Whisper Distilled Medium + whisper.cpp server |
+| Database | PostgreSQL, SQLAlchemy |
+| Speech-to-Text | Groq Whisper Large V3 |
 | AI | Google Gemini API |
 | Text-to-Speech | Edge TTS |
 | Face Recognition | InsightFace + ONNX Runtime |
@@ -50,8 +50,9 @@ cs-ai-assistant/
 
 - Python 3.11
 - Node.js 20 ขึ้นไป
+- PostgreSQL 15 ขึ้นไป
 - เว็บเบราว์เซอร์ที่อนุญาตการใช้กล้องและไมโครโฟน
-- `whisper-server` จาก whisper.cpp และโมเดล Thonburian Whisper Distilled Medium
+- API key ของ [Groq](https://console.groq.com/keys)
 - API key ของ [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 > การใช้กล้องและไมโครโฟนบนเครื่องอื่นควรเปิดเว็บผ่าน HTTPS ส่วน `localhost` สามารถใช้ระหว่างพัฒนาได้
@@ -67,13 +68,10 @@ cd cs-ai-assistant
 
 ### 2. ตั้งค่าและติดตั้ง Backend
 
-คำสั่งสำหรับ Windows PowerShell:
+สร้างฐานข้อมูล PostgreSQL ชื่อ `cs_ai_assistant` ก่อน แล้วเตรียมไฟล์ environment:
 
 ```powershell
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
@@ -84,51 +82,42 @@ APP_NAME=CS AI Assistant
 DEBUG=true
 FRONTEND_URL=http://localhost:3000
 
-DATABASE_PATH=data/cs_ai_assistant.db
+DATABASE_URL=postgresql+psycopg://postgres:รหัสผ่าน@localhost:5432/cs_ai_assistant
 
-WHISPER_SERVER_URL=http://127.0.0.1:8178/inference
-WHISPER_SERVER_EXE=whisper.cpp/build/bin/whisper-server
-WHISPER_MODEL_PATH=models/distill-thonburian-medium-q5_0.bin
-WHISPER_SERVER_HOST=127.0.0.1
-WHISPER_SERVER_PORT=8178
-WHISPER_THREADS=4
-WHISPER_WARMUP_ON_START=true
-WHISPER_WARMUP_TIMEOUT_SECONDS=180
+GROQ_API_KEY=ใส่_Groq_API_Key
+GROQ_STT_MODEL=whisper-large-v3
 STT_TIMEOUT_SECONDS=6
 
 GEMINI_API_KEY=ใส่_Gemini_API_Key
 GEMINI_MODEL=gemini-3.5-flash-lite
-GEMINI_TIMEOUT_SECONDS=6
+GEMINI_TIMEOUT_SECONDS=10
 
 TTS_VOICE=th-TH-NiwatNeural
-FACE_MODEL=buffalo_l
+FACE_MODEL=buffalo_m
 FACE_DETECTION_SIZE=640
 FACE_THRESHOLD=0.45
+IP_CAMERA_URL=http://192.168.0.11:8080
 
 ADMIN_TOKEN=เปลี่ยนเป็นข้อความสุ่มที่ยาวและคาดเดายาก
 ```
 
-เปิด Thonburian Whisper server ก่อน (บน Linux/macOS ใช้ชื่อ binary `whisper-server` ส่วน Windows ให้กำหนด `WHISPER_SERVER_EXE` เป็นไฟล์ `.exe`):
+เปิด Backend ด้วยคำสั่งเดียว หากยังไม่มี `.venv` ระบบจะสร้างและติดตั้ง dependencies ให้อัตโนมัติก่อนเปิด FastAPI:
 
-```powershell
-python scripts/run_whisper_server.py
+```bash
+cd backend
+run
 ```
 
-จากนั้นเปิด Backend อีก terminal หนึ่ง ระบบจะ warm-up Whisper อัตโนมัติก่อนรับ request:
+หากใช้ PowerShell ซึ่งไม่ค้นหาไฟล์ในโฟลเดอร์ปัจจุบันโดยอัตโนมัติ ให้ใช้:
 
 ```powershell
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+cd backend
+.\run.bat
 ```
 
-เมื่อเปิดครั้งแรก InsightFace อาจดาวน์โหลดโมเดล `buffalo_l` จึงใช้เวลานานกว่าปกติ ตรวจสอบสถานะได้ที่ [http://localhost:8000/health](http://localhost:8000/health) และเอกสาร API ที่ [http://localhost:8000/docs](http://localhost:8000/docs)
+เมื่อเปิดครั้งแรก InsightFace อาจดาวน์โหลดโมเดล `buffalo_m` จึงใช้เวลานานกว่าปกติ ตรวจสอบสถานะได้ที่ [http://localhost:8000/health](http://localhost:8000/health) และเอกสาร API ที่ [http://localhost:8000/docs](http://localhost:8000/docs)
 
-ระบบจะสร้างไฟล์ `backend/data/cs_ai_assistant.db` และตารางที่จำเป็นให้อัตโนมัติ ไฟล์ฐานข้อมูลถูกละเว้นจาก Git เพราะมีข้อมูลส่วนบุคคลและ face embedding
-
-หากแยก Whisper และ Backend เป็น service คนละตัว ให้รัน warm-up หลัง Whisper พร้อมและก่อนเริ่ม Backend ด้วยคำสั่งนี้ แล้วตั้ง `WHISPER_WARMUP_ON_START=false` เพื่อไม่ให้ warm-up ซ้ำ:
-
-```powershell
-python scripts/warmup_whisper.py
-```
+ระบบจะสร้างตารางที่ยังไม่มีใน PostgreSQL `cs_ai_assistant` ให้อัตโนมัติ โดยฐานข้อมูลต้องถูกสร้างและเปิด service ไว้ก่อน
 
 ### 3. ตั้งค่าและติดตั้ง Frontend
 
@@ -168,7 +157,7 @@ python scripts\enroll_teachers.py "C:\path\to\teacher-images"
 
 ## เพิ่มหรือปรับปรุงข้อมูลห้อง
 
-ข้อมูลห้องเริ่มต้นของสาขาอยู่ใน `backend/scripts/seed_rooms.py` สามารถเพิ่มหรือปรับปรุงใน SQLite โดยไม่สร้างข้อมูลซ้ำด้วยคำสั่ง:
+ข้อมูลห้องเริ่มต้นของสาขาอยู่ใน `backend/scripts/seed_rooms.py` สามารถเพิ่มหรือปรับปรุงใน PostgreSQL โดยไม่สร้างข้อมูลซ้ำด้วยคำสั่ง:
 
 ```powershell
 cd backend
@@ -176,25 +165,13 @@ cd backend
 python scripts\seed_rooms.py
 ```
 
-## ย้ายข้อมูลเดิมจาก PostgreSQL
-
-สคริปต์ migration จะอ่าน PostgreSQL ด้วย read-only transaction, สร้าง SQLite ใหม่ และตรวจจำนวนแถว primary keys, foreign keys รวมถึง face embedding 512 มิติ ห้ามกำหนดไฟล์ปลายทางที่มีอยู่แล้วเพราะสคริปต์จะไม่เขียนทับ:
-
-```powershell
-cd backend
-$env:POSTGRES_SOURCE_URL="postgresql+psycopg://user:password@localhost:5432/cs_ai_assistant"
-python scripts\migrate_postgres_to_sqlite.py --target data\cs_ai_assistant.db
-Remove-Item Env:POSTGRES_SOURCE_URL
-```
-
-ระหว่างเปลี่ยนระบบ สคริปต์สามารถอ่านค่า `DATABASE_URL` เดิมจาก `backend/.env` แทน `POSTGRES_SOURCE_URL` ได้ แต่ตัวแอปใช้งานเฉพาะ `DATABASE_PATH` หลัง migration แล้ว
-
 ## การตรวจสอบก่อนใช้งาน
 
 ```powershell
 # ตรวจ Backend
 cd backend
 .\.venv\Scripts\python.exe -m compileall app
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
 # ตรวจ Frontend
 cd ..\frontend

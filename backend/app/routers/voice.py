@@ -15,7 +15,7 @@ from app.services.ai_service import ai_service
 from app.services.conversation_session_service import (
     conversation_session_service,
 )
-from app.services.stt_service import STTTimeoutError, stt_service
+from app.services.stt_service import STTError, stt_service
 from app.services.tts_service import tts_service
 
 
@@ -23,6 +23,90 @@ router = APIRouter(
     prefix="/api/voice",
     tags=["Voice"],
 )
+
+async def _audio_payload(text: str) -> dict:
+    mp3_bytes = await tts_service.synthesize(text)
+    return {
+        "assistant_text": text,
+        "audio": base64.b64encode(mp3_bytes).decode("ascii"),
+        "audio_mime_type": "audio/mpeg",
+    }
+
+
+@router.post("/transcribe")
+async def transcribe_voice(
+    session_token: str = Form(...),
+    audio: UploadFile = File(...),
+):
+    """คืนข้อความทันทีเมื่อ STT เสร็จ โดยยังไม่รอ Gemini."""
+
+    session = conversation_session_service.get_or_create_for_voice(
+        session_token
+    )
+    audio_bytes = await audio.read()
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio")
+
+    try:
+        user_text = await stt_service.transcribe(
+            audio_bytes,
+            filename=audio.filename or "audio.webm",
+        )
+    except STTError:
+        payload = await _audio_payload("ขอโทษครับ คุณพูดว่าอะไรนะ")
+        return {
+            "user_text": "",
+            "stt_failed": True,
+            "claimed_name": session.claimed_name,
+            "session_token": session.token,
+            **payload,
+        }
+
+    if not user_text:
+        raise HTTPException(status_code=400, detail="ไม่พบเสียงพูด")
+
+    return {
+        "user_text": user_text,
+        "stt_failed": False,
+        "claimed_name": session.claimed_name,
+        "session_token": session.token,
+    }
+
+
+@router.post("/respond")
+async def respond_to_text(
+    session_token: str = Form(...),
+    user_text: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """เรียก Gemini หนึ่งครั้งและสร้างเสียงตอบ หลังหน้าเว็บแสดง STT แล้ว."""
+
+    session = conversation_session_service.get_or_create_for_voice(
+        session_token
+    )
+    clean_text = " ".join(user_text.strip().split())
+
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    assistant_text = await ai_service.generate_reply(
+        db,
+        session,
+        clean_text,
+    )
+    conversation_session_service.append_exchange(
+        session,
+        clean_text,
+        assistant_text,
+    )
+    payload = await _audio_payload(assistant_text)
+
+    return {
+        "claimed_name": session.claimed_name,
+        "session_token": session.token,
+        **payload,
+    }
 
 
 @router.post("/converse")
@@ -36,7 +120,7 @@ async def converse(
 
     Audio
       ↓
-    Local Thonburian Whisper STT
+    Groq Whisper Large V3 STT
       ↓
     Gemini
       ↓
@@ -75,7 +159,7 @@ async def converse(
             audio_bytes,
             filename=audio.filename or "audio.webm",
         )
-    except STTTimeoutError:
+    except STTError:
         assistant_text = "ขอโทษครับ คุณพูดว่าอะไรนะ"
         mp3_bytes = await tts_service.synthesize(assistant_text)
         return {

@@ -40,6 +40,10 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL
   ?? "http://localhost:8000";
 
+const FACE_CHECK_INTERVAL_MS = 2000;
+const REQUIRED_FACE_DETECTIONS = 3;
+const FACE_SESSION_DURATION_MS = 10000;
+
 
 /* =========================================
    Main Component
@@ -108,6 +112,9 @@ export default function Home() {
   const processingRef =
     useRef(false);
 
+  const audioOutputDeviceIdRef =
+    useRef<string | null>(null);
+
 
   /* ---------------------------------------
      Face Recognition
@@ -118,6 +125,21 @@ export default function Home() {
 
   const sessionTokenRef =
     useRef<string | null>(null);
+
+  const detectedFaceCountRef =
+    useRef(0);
+
+  const faceSessionActiveRef =
+    useRef(false);
+
+  const faceSessionPausedRef =
+    useRef(false);
+
+  const faceSessionExpiresAtRef =
+    useRef(0);
+
+  const endingSessionRef =
+    useRef(false);
 
 
   /* ---------------------------------------
@@ -403,7 +425,85 @@ export default function Home() {
     setHasSession(true);
   }
 
-  async function recognizeFace() {
+  function appendCameraTransform(formData: FormData) {
+    const usingIpCamera = ipCameraActiveRef.current;
+    formData.append(
+      "rotation",
+      usingIpCamera ? "ccw" : "none",
+    );
+    formData.append(
+      "enhance",
+      usingIpCamera ? "true" : "false",
+    );
+  }
+
+  function startFaceSessionTimer() {
+    faceSessionActiveRef.current = true;
+    faceSessionPausedRef.current = false;
+    faceSessionExpiresAtRef.current =
+      Date.now() + FACE_SESSION_DURATION_MS;
+    detectedFaceCountRef.current = 0;
+  }
+
+  function pauseFaceSessionTimer() {
+    if (!faceSessionActiveRef.current) {
+      return;
+    }
+
+    faceSessionPausedRef.current = true;
+    faceSessionExpiresAtRef.current = 0;
+  }
+
+  function resumeFaceSessionTimer() {
+    if (!faceSessionActiveRef.current) {
+      return;
+    }
+
+    faceSessionPausedRef.current = false;
+    faceSessionExpiresAtRef.current =
+      Date.now() + FACE_SESSION_DURATION_MS;
+  }
+
+  async function endCurrentFaceSession() {
+    if (
+      endingSessionRef.current
+      || !faceSessionActiveRef.current
+    ) {
+      return;
+    }
+
+    endingSessionRef.current = true;
+    faceSessionActiveRef.current = false;
+    faceSessionPausedRef.current = false;
+    faceSessionExpiresAtRef.current = 0;
+    detectedFaceCountRef.current = 0;
+
+    const expiredToken = sessionTokenRef.current;
+    sessionTokenRef.current = null;
+    recordingSessionTokenRef.current = null;
+    setHasSession(false);
+    setRecognizedUser(null);
+    setClaimedName(null);
+    setMessages([]);
+    setFaceStatus("หมดเวลาใช้งาน กำลังตรวจหาใบหน้า...");
+
+    try {
+      if (expiredToken) {
+        const formData = new FormData();
+        formData.append("session_token", expiredToken);
+        await fetch(`${API_URL}/api/face/session/end`, {
+          method: "POST",
+          body: formData,
+        });
+      }
+    } catch (error) {
+      console.warn("End face session error:", error);
+    } finally {
+      endingSessionRef.current = false;
+    }
+  }
+
+  async function recognizeFace(image: Blob) {
 
     /*
      * ป้องกัน request ซ้อน
@@ -418,15 +518,6 @@ export default function Home() {
 
     try {
 
-      const image =
-        await captureFrame();
-
-
-      if (!image) {
-        return;
-      }
-
-
       const formData =
         new FormData();
 
@@ -436,6 +527,7 @@ export default function Home() {
         image,
         "face.jpg",
       );
+      appendCameraTransform(formData);
 
 
       if (sessionTokenRef.current) {
@@ -473,6 +565,7 @@ export default function Home() {
         switchSessionToken(
           data.session_token,
         );
+        startFaceSessionTimer();
       }
 
 
@@ -491,17 +584,11 @@ export default function Home() {
         });
 
 
-        if (data.verification_pending) {
-          setFaceStatus(
-            `ตรวจสอบผู้ใช้ไม่ผ่าน ${data.verify_fail_count}/3 ครั้ง`
-          );
-        } else {
-          setFaceStatus(
-            `ยืนยันตัวตนแล้ว (${Math.round(
-              data.similarity * 100
-            )}%)`
-          );
-        }
+        setFaceStatus(
+          `ยืนยันตัวตนแล้ว (${Math.round(
+            data.similarity * 100
+          )}%)`
+        );
 
 
         return;
@@ -521,9 +608,7 @@ export default function Home() {
         );
 
         setFaceStatus(
-          data.verification_failed
-            ? "ยืนยันผู้ใช้ไม่สำเร็จ เปลี่ยนเป็นผู้ใช้ทั่วไป"
-            : data.claimed_name
+          data.claimed_name
             ? "จำชื่อจากบทสนทนาแล้ว แต่ยังไม่ยืนยันใบหน้า"
             : "ไม่รู้จักผู้ใช้นี้"
         );
@@ -575,10 +660,126 @@ export default function Home() {
     }
   }
 
+  async function checkFace() {
+    if (
+      recognizingRef.current
+      || faceSessionActiveRef.current
+      || endingSessionRef.current
+    ) {
+      return;
+    }
+
+    recognizingRef.current = true;
+
+    try {
+      const image = await captureFrame();
+
+      if (!image) {
+        detectedFaceCountRef.current = 0;
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("image", image, "face.jpg");
+      appendCameraTransform(formData);
+
+      const response = await fetch(
+        `${API_URL}/api/face/detect`,
+        { method: "POST", body: formData },
+      );
+
+      if (!response.ok) {
+        detectedFaceCountRef.current = 0;
+        return;
+      }
+
+      const data = await response.json();
+
+      if (!data.face_detected) {
+        detectedFaceCountRef.current = 0;
+        setFaceStatus("ไม่พบใบหน้า");
+        return;
+      }
+
+      detectedFaceCountRef.current += 1;
+      const count = detectedFaceCountRef.current;
+      setFaceStatus(
+        `ตรวจพบใบหน้า ${count}/${REQUIRED_FACE_DETECTIONS}`,
+      );
+
+      if (count >= REQUIRED_FACE_DETECTIONS) {
+        detectedFaceCountRef.current = 0;
+        recognizingRef.current = false;
+        setFaceStatus("กำลังระบุตัวผู้ใช้...");
+        await recognizeFace(image);
+      }
+    } catch (error) {
+      detectedFaceCountRef.current = 0;
+      console.error("Face detection error:", error);
+    } finally {
+      recognizingRef.current = false;
+    }
+  }
+
 
   /* =========================================
      Push-to-talk microphone
   ========================================= */
+
+  function preferredAudioDevice(
+    devices: MediaDeviceInfo[],
+  ): MediaDeviceInfo | undefined {
+    const score = (device: MediaDeviceInfo) => {
+      const label = device.label.toLowerCase();
+      let value = 0;
+
+      if (/usb|headset|headphone|ab13x/.test(label)) {
+        value += 10;
+      }
+      if (device.deviceId !== "default") {
+        value += 1;
+      }
+      return value;
+    };
+
+    return [...devices].sort(
+      (left, right) => score(right) - score(left),
+    )[0];
+  }
+
+  async function discoverPreferredAudioOutput() {
+    try {
+      const devices = await Promise.race([
+        navigator.mediaDevices.enumerateDevices(),
+        new Promise<MediaDeviceInfo[]>((resolve) => {
+          window.setTimeout(() => resolve([]), 1000);
+        }),
+      ]);
+      const output = preferredAudioDevice(
+        devices.filter((device) => device.kind === "audiooutput"),
+      );
+      audioOutputDeviceIdRef.current = output?.deviceId ?? null;
+    } catch (error) {
+      console.warn("Audio device discovery error:", error);
+    }
+  }
+
+  async function openPreferredMicrophone(): Promise<MediaStream> {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: { ideal: 1 },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+
+    // อุปกรณ์ USB ถูกตั้งเป็น system default บน Raspberry Pi อยู่แล้ว
+    // การค้นหา output ทำเบื้องหลังเพื่อไม่ให้ขวางการเริ่มอัดเสียง
+    void discoverPreferredAudioOutput();
+    return stream;
+  }
 
   async function preparePushToTalk() {
     const requestedSessionToken =
@@ -594,13 +795,11 @@ export default function Home() {
     }
 
     startingMicrophoneRef.current = true;
+    pauseFaceSessionTimer();
 
     try {
       const stream =
-        await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: false,
-        });
+        await openPreferredMicrophone();
 
       if (
         !pushToTalkHeldRef.current
@@ -608,17 +807,18 @@ export default function Home() {
         stream.getTracks().forEach(
           (track) => track.stop(),
         );
+        resumeFaceSessionTimer();
         return;
       }
 
       microphoneStreamRef.current = stream;
 
-      const recorder = new MediaRecorder(
-        stream,
-        {
-          mimeType: "audio/webm;codecs=opus",
-        },
-      );
+      const recorderOptions = MediaRecorder.isTypeSupported(
+        "audio/webm;codecs=opus",
+      )
+        ? { mimeType: "audio/webm;codecs=opus" }
+        : undefined;
+      const recorder = new MediaRecorder(stream, recorderOptions);
 
       mediaRecorderRef.current = recorder;
       recordingSessionTokenRef.current =
@@ -656,6 +856,8 @@ export default function Home() {
             audioBlob,
             recordedSessionToken,
           );
+        } else {
+          resumeFaceSessionTimer();
         }
       };
 
@@ -667,6 +869,7 @@ export default function Home() {
         );
         microphoneStreamRef.current = null;
         mediaRecorderRef.current = null;
+        resumeFaceSessionTimer();
       }
     } catch (error) {
       console.error(
@@ -676,6 +879,7 @@ export default function Home() {
       setFaceStatus(
         "ไม่สามารถเปิดไมโครโฟนได้",
       );
+      resumeFaceSessionTimer();
     } finally {
       startingMicrophoneRef.current = false;
     }
@@ -764,86 +968,102 @@ export default function Home() {
 
 
     try {
-
-      const formData =
-        new FormData();
-
-
-      formData.append(
+      const transcriptionForm = new FormData();
+      transcriptionForm.append(
         "session_token",
         requestSessionToken,
       );
-
-
-      formData.append(
+      transcriptionForm.append(
         "audio",
         audioBlob,
         "speech.webm",
       );
 
-
-      const response =
-        await fetch(
-          `${API_URL}/api/voice/converse`,
+      const transcriptionResponse = await fetch(
+          `${API_URL}/api/voice/transcribe`,
           {
             method: "POST",
-            body: formData,
+            body: transcriptionForm,
           }
         );
 
-
-      if (!response.ok) {
-
-        const error =
-          await response.text();
-
+      if (!transcriptionResponse.ok) {
         console.error(
-          "Voice API:",
-          error
+          "STT API:",
+          await transcriptionResponse.text(),
         );
-
         return;
       }
 
+      const transcription =
+        await transcriptionResponse.json();
 
-      const data =
-        await response.json();
+      if (transcription.stt_failed) {
+        setMessages((current) => [
+          ...current,
+          {
+            role: "ai",
+            text: transcription.assistant_text,
+          },
+        ]);
+        await playBase64Audio(
+          transcription.audio,
+          transcription.audio_mime_type,
+        );
+        return;
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          role: "user",
+          text: transcription.user_text,
+        },
+        {
+          role: "ai",
+          text: "...",
+        },
+      ]);
+
+      const responseForm = new FormData();
+      responseForm.append("session_token", requestSessionToken);
+      responseForm.append("user_text", transcription.user_text);
+
+      const response = await fetch(
+        `${API_URL}/api/voice/respond`,
+        {
+          method: "POST",
+          body: responseForm,
+        },
+      );
+
+      if (!response.ok) {
+        setMessages((current) => [
+          ...current.slice(0, -1),
+          {
+            role: "ai",
+            text: "ขออภัยครับ ระบบไม่สามารถประมวลผลคำตอบได้",
+          },
+        ]);
+        console.error("AI API:", await response.text());
+        return;
+      }
+
+      const data = await response.json();
+      setMessages((current) => [
+        ...current.slice(0, -1),
+        {
+          role: "ai",
+          text: data.assistant_text,
+        },
+      ]);
 
       if (
         data.claimed_name
-        && sessionTokenRef.current
-          === requestSessionToken
+        && sessionTokenRef.current === requestSessionToken
       ) {
-        setClaimedName(
-          data.claimed_name
-        );
+        setClaimedName(data.claimed_name);
       }
-
-
-      /* ---------------------------------------
-         Show user message
-      --------------------------------------- */
-
-      setMessages(
-        (current) => [
-          ...current,
-
-          {
-            role: "user",
-            text: data.user_text,
-          },
-
-          {
-            role: "ai",
-            text: data.assistant_text,
-          },
-        ]
-      );
-
-
-      /* ---------------------------------------
-         Play TTS
-      --------------------------------------- */
 
       await playBase64Audio(
         data.audio,
@@ -862,6 +1082,7 @@ export default function Home() {
         false;
 
       setProcessing(false);
+      resumeFaceSessionTimer();
     }
   }
 
@@ -918,6 +1139,23 @@ export default function Home() {
 
     const audio =
       new Audio(url);
+
+    const selectableAudio = audio as HTMLAudioElement & {
+      setSinkId?: (deviceId: string) => Promise<void>;
+    };
+
+    if (
+      audioOutputDeviceIdRef.current
+      && selectableAudio.setSinkId
+    ) {
+      try {
+        await selectableAudio.setSinkId(
+          audioOutputDeviceIdRef.current,
+        );
+      } catch (error) {
+        console.warn("Audio output selection error:", error);
+      }
+    }
 
     activeAudioRef.current = audio;
 
@@ -1103,7 +1341,7 @@ export default function Home() {
 
   /*
    * เมื่อกล้องพร้อม
-   * เริ่ม Face Recognition
+   * ตรวจใบหน้าทุก 2 วินาที และ recognize เมื่อพบติดกัน 3 ครั้ง
    */
   useEffect(() => {
 
@@ -1114,15 +1352,15 @@ export default function Home() {
     const firstRecognitionTimer =
       window.setTimeout(
         () => {
-          void recognizeFace();
+          void checkFace();
         },
         0,
       );
 
     const interval =
       window.setInterval(
-        recognizeFace,
-        2000,
+        checkFace,
+        FACE_CHECK_INTERVAL_MS,
       );
 
     return () => {
@@ -1132,9 +1370,27 @@ export default function Home() {
       window.clearInterval(interval);
     };
 
-    // recognizeFace ใช้เฉพาะ refs ซึ่งคงที่ตลอดอายุ component
+    // checkFace ใช้เฉพาะ refs ซึ่งคงที่ตลอดอายุ component
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraReady]);
+
+
+  /* หมด session หลังไม่มีคำสั่งเสียง 10 วินาที */
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (
+        faceSessionActiveRef.current
+        && !faceSessionPausedRef.current
+        && faceSessionExpiresAtRef.current > 0
+        && Date.now() >= faceSessionExpiresAtRef.current
+      ) {
+        void endCurrentFaceSession();
+      }
+    }, 250);
+
+    return () => window.clearInterval(interval);
+
+  }, []);
 
 
   /*

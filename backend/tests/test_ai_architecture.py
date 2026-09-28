@@ -6,7 +6,10 @@ from types import SimpleNamespace
 from pydantic import ValidationError
 
 
-os.environ.setdefault("DATABASE_PATH", ":memory:")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+psycopg://test:test@localhost/test",
+)
 os.environ.setdefault("GROQ_API_KEY", "test")
 os.environ.setdefault("GEMINI_API_KEY", "test")
 os.environ.setdefault("ADMIN_TOKEN", "test")
@@ -15,7 +18,6 @@ os.environ.setdefault("ADMIN_TOKEN", "test")
 from app.services.ai_service import (  # noqa: E402
     AIResponse,
     AIService,
-    FunctionRequest,
     GeminiRequestTimeoutError,
 )
 from app.services.tool_service import tool_service  # noqa: E402
@@ -33,6 +35,10 @@ class StubAIService(AIService):
     @staticmethod
     def get_user_context(db, session):
         return "ผู้ใช้ปัจจุบัน:\nชื่อ: ทดสอบ\nrole: guest\nverified: false"
+
+    @classmethod
+    def get_data_context(cls, db, session):
+        return {"lecturers": [], "rooms": [], "my_schedule": []}
 
     @classmethod
     def get_current_time_context(cls):
@@ -56,7 +62,7 @@ class TimeoutAIService(StubAIService):
 class AIArchitectureTests(unittest.TestCase):
     def test_direct_answer_calls_gemini_once(self):
         service = StubAIService(
-            [AIResponse(response="สวัสดีครับ", functions=[])]
+            [AIResponse(response="สวัสดีครับ")]
         )
 
         reply = asyncio.run(
@@ -70,24 +76,8 @@ class AIArchitectureTests(unittest.TestCase):
         self.assertEqual(reply, "สวัสดีครับ")
         self.assertEqual(service.request_count, 1)
 
-    def test_tool_answer_calls_gemini_at_most_twice(self):
-        service = StubAIService(
-            [
-                AIResponse(
-                    response="",
-                    functions=[
-                        FunctionRequest(
-                            name="not_in_whitelist",
-                            arguments={},
-                        )
-                    ],
-                ),
-                AIResponse(
-                    response="ไม่พบข้อมูลครับ",
-                    functions=[],
-                ),
-            ]
-        )
+    def test_context_answer_calls_gemini_once(self):
+        service = StubAIService([AIResponse(response="ไม่พบข้อมูลครับ")])
 
         reply = asyncio.run(
             service.generate_reply(
@@ -98,34 +88,7 @@ class AIArchitectureTests(unittest.TestCase):
         )
 
         self.assertEqual(reply, "ไม่พบข้อมูลครับ")
-        self.assertEqual(service.request_count, 2)
-
-    def test_second_gemini_failure_returns_safe_message(self):
-        service = StubAIService(
-            [
-                AIResponse(
-                    response="",
-                    functions=[
-                        FunctionRequest(
-                            name="not_in_whitelist",
-                            arguments={},
-                        )
-                    ],
-                ),
-                None,
-            ]
-        )
-
-        reply = asyncio.run(
-            service.generate_reply(
-                object(),
-                SimpleNamespace(id=1, user_id=None),
-                "ขอข้อมูล",
-            )
-        )
-
-        self.assertEqual(reply, service.FALLBACK_RESPONSE)
-        self.assertEqual(service.request_count, 2)
+        self.assertEqual(service.request_count, 1)
 
     def test_gemini_timeout_returns_timeout_message(self):
         service = TimeoutAIService([])
@@ -147,17 +110,22 @@ class AIArchitectureTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             AIService._parse_response(
-                '{"response":"ok","functions":[],"extra":true}'
+                '{"response":"ok","extra":true}'
             )
 
-    def test_base_prompt_does_not_contain_department_file(self):
+    def test_prompt_contains_context_without_function_rules(self):
         prompt = AIService._build_system_prompt(
             "ผู้ใช้ปัจจุบัน:\nชื่อ: ทดสอบ\nrole: student\nverified: true",
             "เวลาทดสอบ",
+            {
+                "department": [{"content": "ปีการศึกษา 2536"}],
+                "my_schedule": [{"subject": "AI"}],
+            },
         )
 
-        self.assertNotIn("ปีการศึกษา 2536", prompt)
-        self.assertIn("search_department_data", prompt)
+        self.assertIn("ปีการศึกษา 2536", prompt)
+        self.assertIn('"my_schedule"', prompt)
+        self.assertNotIn("function_results", prompt)
 
     def test_guest_cannot_read_a_schedule(self):
         results = tool_service.execute_calls(
