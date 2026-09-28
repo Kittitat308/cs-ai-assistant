@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: str
-    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model: str = "gemini-3.1-flash-lite-preview"
     gemini_timeout_seconds: float = 10.0
 
     # Edge TTS

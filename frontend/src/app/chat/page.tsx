@@ -696,6 +696,45 @@ export default function Home() {
       );
   }
 
+  async function playGreeting(sessionToken: string) {
+    pauseFaceSessionTimer();
+
+    try {
+      const formData = new FormData();
+      formData.append("session_token", sessionToken);
+
+      const response = await fetch(
+        `${API_URL}/api/voice/greeting`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+
+      if (!response.ok) {
+        console.error("Greeting TTS API:", await response.text());
+        return;
+      }
+
+      const data = await response.json();
+
+      if (sessionTokenRef.current !== sessionToken) {
+        return;
+      }
+
+      await playBase64Audio(
+        data.audio,
+        data.audio_mime_type,
+      );
+    } catch (error) {
+      console.error("Greeting TTS error:", error);
+    } finally {
+      if (sessionTokenRef.current === sessionToken) {
+        resumeFaceSessionTimer();
+      }
+    }
+  }
+
 
   /* =========================================
      Start application
@@ -716,6 +755,21 @@ export default function Home() {
 
       sessionTokenRef.current = storedSession.token;
       startFaceSessionTimer(storedSession.expiresAt);
+      const recognizedUser = storedSession.recognizedUser;
+      const greeting = (
+        recognizedUser
+        && ["student", "lecturer"].includes(recognizedUser.role)
+      )
+        ? `สวัสดีครับคุณ ${recognizedUser.name} cs ai assistant พร้อมใช้งานแล้ว`
+        : "สวัสดีครับ cs ai assistant พร้อมใช้งานแล้ว";
+
+      setMessages([
+        {
+          role: "ai",
+          text: greeting,
+        },
+      ]);
+      void playGreeting(storedSession.token);
     }, 0);
 
     return () => window.clearTimeout(initializeTimer);

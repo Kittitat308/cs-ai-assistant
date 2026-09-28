@@ -11,6 +11,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.user import User
 from app.services.ai_service import ai_service
 from app.services.conversation_session_service import (
     conversation_session_service,
@@ -31,6 +32,38 @@ async def _audio_payload(text: str) -> dict:
         "audio": base64.b64encode(mp3_bytes).decode("ascii"),
         "audio_mime_type": "audio/mpeg",
     }
+
+
+def _greeting_text(db: Session, user_id: int | None) -> str:
+    if user_id is not None:
+        user = db.get(User, user_id)
+
+        if (
+            user is not None
+            and user.is_active
+            and user.role in {"student", "lecturer"}
+        ):
+            return (
+                f"สวัสดีครับคุณ {user.name} "
+                "ระบบ cs ai assistant พร้อมใช้งานแล้ว"
+            )
+
+    return "สวัสดีครับ ระบบ cs ai assistant พร้อมใช้งานแล้ว"
+
+
+@router.post("/greeting")
+async def greeting(
+    session_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """สร้างเสียงทักทายด้วยข้อความสำเร็จรูป โดยไม่เรียก Gemini."""
+
+    session = conversation_session_service.get_or_create_for_voice(
+        session_token
+    )
+    return await _audio_payload(
+        _greeting_text(db, session.user_id)
+    )
 
 
 @router.post("/transcribe")
