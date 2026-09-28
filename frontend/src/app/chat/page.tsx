@@ -6,7 +6,13 @@ import {
   useState,
 } from "react";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+import {
+  clearStoredChatSession,
+  readStoredChatSession,
+  writeStoredChatSession,
+} from "../session";
 
 
 /* =========================================
@@ -19,19 +25,6 @@ type ChatMessage = {
 };
 
 
-type RecognizedUser = {
-  id: number;
-  name: string;
-  role: string;
-};
-
-
-type CameraSource =
-  | "ip"
-  | "local"
-  | null;
-
-
 /* =========================================
    Config
 ========================================= */
@@ -40,8 +33,6 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL
   ?? "http://localhost:8000";
 
-const FACE_CHECK_INTERVAL_MS = 2000;
-const REQUIRED_FACE_DETECTIONS = 3;
 const FACE_SESSION_DURATION_MS = 10000;
 
 
@@ -51,15 +42,11 @@ const FACE_SESSION_DURATION_MS = 10000;
 
 export default function Home() {
 
+  const router = useRouter();
+
   /* ---------------------------------------
      HTML references
   --------------------------------------- */
-
-  const videoRef =
-    useRef<HTMLVideoElement | null>(null);
-
-  const canvasRef =
-    useRef<HTMLCanvasElement | null>(null);
 
   const messagesEndRef =
     useRef<HTMLDivElement | null>(null);
@@ -68,21 +55,6 @@ export default function Home() {
   /* ---------------------------------------
      Media references
   --------------------------------------- */
-
-  const cameraStreamRef =
-    useRef<MediaStream | null>(null);
-
-  const ipCameraFrameRef =
-    useRef<Blob | null>(null);
-
-  const ipCameraFrameTimeRef =
-    useRef(0);
-
-  const ipCameraRequestRef =
-    useRef(false);
-
-  const ipCameraActiveRef =
-    useRef(false);
 
   const microphoneStreamRef =
     useRef<MediaStream | null>(null);
@@ -120,14 +92,8 @@ export default function Home() {
      Face Recognition
   --------------------------------------- */
 
-  const recognizingRef =
-    useRef(false);
-
   const sessionTokenRef =
     useRef<string | null>(null);
-
-  const detectedFaceCountRef =
-    useRef(0);
 
   const faceSessionActiveRef =
     useRef(false);
@@ -146,303 +112,49 @@ export default function Home() {
      React state
   --------------------------------------- */
 
-  const [cameraReady, setCameraReady] =
-    useState(false);
-
-  const [cameraSource, setCameraSource] =
-    useState<CameraSource>(null);
-
-  const [recognizedUser, setRecognizedUser] =
-    useState<RecognizedUser | null>(null);
-
-  const [claimedName, setClaimedName] =
-    useState<string | null>(null);
-
-  const [faceStatus, setFaceStatus] =
-    useState("กำลังเปิดกล้อง...");
-
   const [listening, setListening] =
     useState(false);
 
   const [processing, setProcessing] =
     useState(false);
 
-  const [hasSession, setHasSession] =
-    useState(false);
-
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
 
-
-  /* =========================================
-     Camera
-  ========================================= */
-
-  function updateIpCameraFrame(
-    image: Blob,
-  ) {
-    ipCameraFrameRef.current = image;
-    ipCameraFrameTimeRef.current = Date.now();
-  }
-
-
-  async function refreshIpCameraFrame():
-    Promise<boolean> {
-    if (ipCameraRequestRef.current) {
-      return ipCameraFrameRef.current !== null;
-    }
-
-    ipCameraRequestRef.current = true;
-
-    try {
-      const response = await fetch(
-        `${API_URL}/api/face/camera/snapshot?t=${Date.now()}`,
-        { cache: "no-store" },
-      );
-
-      if (!response.ok) {
-        return false;
-      }
-
-      const image = await response.blob();
-
-      if (!image.type.startsWith("image/") || image.size === 0) {
-        return false;
-      }
-
-      updateIpCameraFrame(image);
-      return true;
-    } catch (error) {
-      console.warn("IP camera error:", error);
-      return false;
-    } finally {
-      ipCameraRequestRef.current = false;
-    }
-  }
-
-
-  function stopIpCamera() {
-    ipCameraActiveRef.current = false;
-    ipCameraFrameRef.current = null;
-    ipCameraFrameTimeRef.current = 0;
-  }
-
-
-  async function startIpCamera():
-    Promise<boolean> {
-    const opened =
-      await refreshIpCameraFrame();
-
-    if (!opened) {
-      stopIpCamera();
-      return false;
-    }
-
-    ipCameraActiveRef.current = true;
-    setCameraSource("ip");
-    setCameraReady(true);
-    setFaceStatus(
-      "กล้อง IP พร้อม กำลังตรวจสอบใบหน้า..."
-    );
-
-    return true;
-  }
-
-
-  async function startLocalCamera() {
-
-    try {
-
-      const stream =
-        await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: {
-              ideal: 640,
-            },
-
-            height: {
-              ideal: 480,
-            },
-
-            facingMode: "user",
-          },
-
-          audio: false,
-        });
-
-
-      cameraStreamRef.current =
-        stream;
-
-      setCameraSource("local");
-
-
-      if (videoRef.current) {
-
-        videoRef.current.srcObject =
-          stream;
-
-        await videoRef.current.play();
-
-        setCameraReady(true);
-
-        setFaceStatus(
-          "กล้องเครื่องพร้อม กำลังตรวจสอบใบหน้า..."
-        );
-      }
-
-    } catch (error) {
-
-      console.error(
-        "Camera error:",
-        error
-      );
-
-      setFaceStatus(
-        "ไม่สามารถเปิดกล้องได้"
-      );
-    }
-  }
-
-
-  async function startCamera() {
-    const ipCameraOpened =
-      await startIpCamera();
-
-    if (!ipCameraOpened) {
-      await startLocalCamera();
-    }
-  }
+  const [remainingSeconds, setRemainingSeconds] =
+    useState(FACE_SESSION_DURATION_MS / 1000);
 
 
   /* =========================================
-     Capture camera frame
+     Session
   ========================================= */
 
-  async function captureFrame():
-    Promise<Blob | null> {
-
-    if (ipCameraActiveRef.current) {
-      const frameIsFresh = (
-        ipCameraFrameRef.current !== null
-        && Date.now() - ipCameraFrameTimeRef.current < 1000
-      );
-
-      if (
-        frameIsFresh
-        || await refreshIpCameraFrame()
-      ) {
-        return ipCameraFrameRef.current;
-      }
-
-      stopIpCamera();
-      setCameraReady(false);
-      setFaceStatus(
-        "กล้อง IP ใช้งานไม่ได้ กำลังเปลี่ยนเป็นกล้องเครื่อง..."
-      );
-      await startLocalCamera();
-      return null;
-    }
-
-    const video =
-      videoRef.current;
-
-    const canvas =
-      canvasRef.current;
-
+  function updateStoredSessionExpiry(expiresAt: number) {
+    const storedSession = readStoredChatSession();
 
     if (
-      !video
-      || !canvas
-      || video.videoWidth === 0
+      !storedSession
+      || storedSession.token !== sessionTokenRef.current
     ) {
-      return null;
+      return;
     }
 
-
-    canvas.width =
-      video.videoWidth;
-
-    canvas.height =
-      video.videoHeight;
-
-
-    const context =
-      canvas.getContext("2d");
-
-
-    if (!context) {
-      return null;
-    }
-
-
-    /*
-     * ส่งภาพจริงให้ backend
-     *
-     * ไม่ mirror เหมือนภาพที่แสดงบน UI
-     */
-    context.drawImage(
-      video,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
-
-
-    return new Promise((resolve) => {
-
-      canvas.toBlob(
-        resolve,
-        "image/jpeg",
-        0.8,
-      );
-
+    writeStoredChatSession({
+      ...storedSession,
+      expiresAt,
     });
   }
 
-
-  /* =========================================
-     Face Recognition
-  ========================================= */
-
-  function switchSessionToken(
-    nextToken: string,
+  function startFaceSessionTimer(
+    expiresAt = Date.now() + FACE_SESSION_DURATION_MS,
   ) {
-    const previousToken =
-      sessionTokenRef.current;
-
-    if (
-      previousToken
-      && previousToken !== nextToken
-    ) {
-      setMessages([]);
-      setClaimedName(null);
-    }
-
-    sessionTokenRef.current =
-      nextToken;
-    setHasSession(true);
-  }
-
-  function appendCameraTransform(formData: FormData) {
-    const usingIpCamera = ipCameraActiveRef.current;
-    formData.append(
-      "rotation",
-      usingIpCamera ? "ccw" : "none",
-    );
-    formData.append(
-      "enhance",
-      usingIpCamera ? "true" : "false",
-    );
-  }
-
-  function startFaceSessionTimer() {
     faceSessionActiveRef.current = true;
     faceSessionPausedRef.current = false;
-    faceSessionExpiresAtRef.current =
-      Date.now() + FACE_SESSION_DURATION_MS;
-    detectedFaceCountRef.current = 0;
+    faceSessionExpiresAtRef.current = expiresAt;
+    setRemainingSeconds(
+      Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
+    );
+    updateStoredSessionExpiry(expiresAt);
   }
 
   function pauseFaceSessionTimer() {
@@ -452,6 +164,8 @@ export default function Home() {
 
     faceSessionPausedRef.current = true;
     faceSessionExpiresAtRef.current = 0;
+    setRemainingSeconds(FACE_SESSION_DURATION_MS / 1000);
+    updateStoredSessionExpiry(0);
   }
 
   function resumeFaceSessionTimer() {
@@ -460,8 +174,10 @@ export default function Home() {
     }
 
     faceSessionPausedRef.current = false;
-    faceSessionExpiresAtRef.current =
-      Date.now() + FACE_SESSION_DURATION_MS;
+    const expiresAt = Date.now() + FACE_SESSION_DURATION_MS;
+    faceSessionExpiresAtRef.current = expiresAt;
+    setRemainingSeconds(FACE_SESSION_DURATION_MS / 1000);
+    updateStoredSessionExpiry(expiresAt);
   }
 
   async function endCurrentFaceSession() {
@@ -476,16 +192,14 @@ export default function Home() {
     faceSessionActiveRef.current = false;
     faceSessionPausedRef.current = false;
     faceSessionExpiresAtRef.current = 0;
-    detectedFaceCountRef.current = 0;
+    setRemainingSeconds(0);
 
     const expiredToken = sessionTokenRef.current;
+    clearStoredChatSession();
     sessionTokenRef.current = null;
     recordingSessionTokenRef.current = null;
-    setHasSession(false);
-    setRecognizedUser(null);
-    setClaimedName(null);
     setMessages([]);
-    setFaceStatus("หมดเวลาใช้งาน กำลังตรวจหาใบหน้า...");
+    router.replace("/");
 
     try {
       if (expiredToken) {
@@ -502,225 +216,6 @@ export default function Home() {
       endingSessionRef.current = false;
     }
   }
-
-  async function recognizeFace(image: Blob) {
-
-    /*
-     * ป้องกัน request ซ้อน
-     */
-    if (recognizingRef.current) {
-      return;
-    }
-
-
-    recognizingRef.current = true;
-
-
-    try {
-
-      const formData =
-        new FormData();
-
-
-      formData.append(
-        "image",
-        image,
-        "face.jpg",
-      );
-      appendCameraTransform(formData);
-
-
-      if (sessionTokenRef.current) {
-
-        formData.append(
-          "session_token",
-          sessionTokenRef.current,
-        );
-      }
-
-
-      const response =
-        await fetch(
-          `${API_URL}/api/face/recognize`,
-          {
-            method: "POST",
-            body: formData,
-          }
-        );
-
-
-      if (!response.ok) {
-        return;
-      }
-
-
-      const data =
-        await response.json();
-
-
-      /*
-       * เก็บ backend session token
-       */
-      if (data.session_token) {
-        switchSessionToken(
-          data.session_token,
-        );
-        startFaceSessionTimer();
-      }
-
-
-      /* ---------------------------------------
-         Recognized
-      --------------------------------------- */
-
-      if (data.status === "recognized") {
-
-        setClaimedName(null);
-
-        setRecognizedUser({
-          id: data.user_id,
-          name: data.name,
-          role: data.role,
-        });
-
-
-        setFaceStatus(
-          `ยืนยันตัวตนแล้ว (${Math.round(
-            data.similarity * 100
-          )}%)`
-        );
-
-
-        return;
-      }
-
-
-      /* ---------------------------------------
-         Unknown
-      --------------------------------------- */
-
-      if (data.status === "unknown") {
-
-        setRecognizedUser(null);
-
-        setClaimedName(
-          data.claimed_name ?? null
-        );
-
-        setFaceStatus(
-          data.claimed_name
-            ? "จำชื่อจากบทสนทนาแล้ว แต่ยังไม่ยืนยันใบหน้า"
-            : "ไม่รู้จักผู้ใช้นี้"
-        );
-
-
-        return;
-      }
-
-
-      /* ---------------------------------------
-         No face
-      --------------------------------------- */
-
-      if (data.status === "no_face") {
-
-        setFaceStatus(
-          "ไม่พบใบหน้า"
-        );
-
-        return;
-      }
-
-
-      /* ---------------------------------------
-         Multiple faces
-      --------------------------------------- */
-
-      if (
-        data.status
-        === "multiple_faces"
-      ) {
-
-        setFaceStatus(
-          "กรุณาให้มีผู้ใช้เพียงหนึ่งคนหน้ากล้อง"
-        );
-      }
-
-    } catch (error) {
-
-      console.error(
-        "Face recognition error:",
-        error
-      );
-
-    } finally {
-
-      recognizingRef.current =
-        false;
-    }
-  }
-
-  async function checkFace() {
-    if (
-      recognizingRef.current
-      || faceSessionActiveRef.current
-      || endingSessionRef.current
-    ) {
-      return;
-    }
-
-    recognizingRef.current = true;
-
-    try {
-      const image = await captureFrame();
-
-      if (!image) {
-        detectedFaceCountRef.current = 0;
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("image", image, "face.jpg");
-      appendCameraTransform(formData);
-
-      const response = await fetch(
-        `${API_URL}/api/face/detect`,
-        { method: "POST", body: formData },
-      );
-
-      if (!response.ok) {
-        detectedFaceCountRef.current = 0;
-        return;
-      }
-
-      const data = await response.json();
-
-      if (!data.face_detected) {
-        detectedFaceCountRef.current = 0;
-        setFaceStatus("ไม่พบใบหน้า");
-        return;
-      }
-
-      detectedFaceCountRef.current += 1;
-      const count = detectedFaceCountRef.current;
-      setFaceStatus(
-        `ตรวจพบใบหน้า ${count}/${REQUIRED_FACE_DETECTIONS}`,
-      );
-
-      if (count >= REQUIRED_FACE_DETECTIONS) {
-        detectedFaceCountRef.current = 0;
-        recognizingRef.current = false;
-        setFaceStatus("กำลังระบุตัวผู้ใช้...");
-        await recognizeFace(image);
-      }
-    } catch (error) {
-      detectedFaceCountRef.current = 0;
-      console.error("Face detection error:", error);
-    } finally {
-      recognizingRef.current = false;
-    }
-  }
-
 
   /* =========================================
      Push-to-talk microphone
@@ -875,9 +370,6 @@ export default function Home() {
       console.error(
         "Microphone error:",
         error,
-      );
-      setFaceStatus(
-        "ไม่สามารถเปิดไมโครโฟนได้",
       );
       resumeFaceSessionTimer();
     } finally {
@@ -1058,13 +550,6 @@ export default function Home() {
         },
       ]);
 
-      if (
-        data.claimed_name
-        && sessionTokenRef.current === requestSessionToken
-      ) {
-        setClaimedName(data.claimed_name);
-      }
-
       await playBase64Audio(
         data.audio,
         data.audio_mime_type,
@@ -1203,15 +688,6 @@ export default function Home() {
     pushToTalkHeldRef.current = false;
     stopRecording();
     activeAudioRef.current?.pause();
-    stopIpCamera();
-    cameraStreamRef.current
-      ?.getTracks()
-      .forEach(
-        (track) =>
-          track.stop()
-      );
-
-
     microphoneStreamRef.current
       ?.getTracks()
       .forEach(
@@ -1222,49 +698,36 @@ export default function Home() {
 
 
   /* =========================================
-     Role text
-  ========================================= */
-
-  function roleLabel(
-    role?: string
-  ) {
-
-    if (role === "student") {
-      return "นักศึกษา";
-    }
-
-    if (role === "lecturer") {
-      return "อาจารย์";
-    }
-
-    if (role === "admin") {
-      return "ผู้ดูแลระบบ";
-    }
-
-    return "ผู้ใช้ทั่วไป";
-  }
-
-
-  /* =========================================
      Start application
   ========================================= */
 
   useEffect(() => {
+    const initializeTimer = window.setTimeout(() => {
+      const storedSession = readStoredChatSession();
 
-    const startTimer =
-      window.setTimeout(
-        () => {
-          void startCamera();
-        },
-        0,
-      );
+      if (
+        !storedSession
+        || storedSession.expiresAt <= Date.now()
+      ) {
+        clearStoredChatSession();
+        router.replace("/");
+        return;
+      }
 
-    return () => {
-      window.clearTimeout(startTimer);
-      stopAllMedia();
-    };
+      sessionTokenRef.current = storedSession.token;
+      startFaceSessionTimer(storedSession.expiresAt);
+    }, 0);
 
-    // เริ่มและ cleanup media เฉพาะตอน mount/unmount
+    return () => window.clearTimeout(initializeTimer);
+
+    // ตรวจ session ที่ส่งมาจากหน้าเข้าสู่ระบบครั้งเดียวตอน mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return () => stopAllMedia();
+
+    // cleanup เฉพาะไมโครโฟนและเสียงเมื่อออกจากหน้าแชต
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1339,42 +802,6 @@ export default function Home() {
   }, []);
 
 
-  /*
-   * เมื่อกล้องพร้อม
-   * ตรวจใบหน้าทุก 2 วินาที และ recognize เมื่อพบติดกัน 3 ครั้ง
-   */
-  useEffect(() => {
-
-    if (!cameraReady) {
-      return;
-    }
-
-    const firstRecognitionTimer =
-      window.setTimeout(
-        () => {
-          void checkFace();
-        },
-        0,
-      );
-
-    const interval =
-      window.setInterval(
-        checkFace,
-        FACE_CHECK_INTERVAL_MS,
-      );
-
-    return () => {
-      window.clearTimeout(
-        firstRecognitionTimer
-      );
-      window.clearInterval(interval);
-    };
-
-    // checkFace ใช้เฉพาะ refs ซึ่งคงที่ตลอดอายุ component
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraReady]);
-
-
   /* หมด session หลังไม่มีคำสั่งเสียง 10 วินาที */
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1382,14 +809,28 @@ export default function Home() {
         faceSessionActiveRef.current
         && !faceSessionPausedRef.current
         && faceSessionExpiresAtRef.current > 0
-        && Date.now() >= faceSessionExpiresAtRef.current
       ) {
-        void endCurrentFaceSession();
+        const remaining = Math.max(
+          0,
+          Math.ceil(
+            (faceSessionExpiresAtRef.current - Date.now()) / 1000,
+          ),
+        );
+
+        setRemainingSeconds((current) => (
+          current === remaining ? current : remaining
+        ));
+
+        if (remaining === 0) {
+          void endCurrentFaceSession();
+        }
       }
     }, 250);
 
     return () => window.clearInterval(interval);
 
+    // endCurrentFaceSession ใช้ refs และ router ของ component instance นี้
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -1417,15 +858,15 @@ export default function Home() {
       <header className="header">
 
         <h1>
-          CS AI Assistant
+          <span>CS</span> AI Assistant
         </h1>
 
-        <Link
-          className="header-home-link"
-          href="/"
+        <div
+          aria-label={`เหลือเวลา ${remainingSeconds} วินาที`}
+          className="session-countdown"
         >
-          หน้าหลัก
-        </Link>
+          {remainingSeconds}
+        </div>
 
       </header>
 
@@ -1433,121 +874,14 @@ export default function Home() {
       <section className="content">
 
         {/* ================================
-            LEFT : CAMERA
-        ================================= */}
-
-        <div className="panel camera-panel">
-
-          <div className="camera-wrapper">
-
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                width: "1px",
-                height: "1px",
-                opacity: 0,
-                pointerEvents: "none",
-              }}
-            />
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: "100%",
-                height: "100%",
-                color: "#94a3b8",
-                textAlign: "center",
-                padding: "24px",
-              }}
-            >
-              {cameraSource === "ip"
-                ? "ระบบกำลังตรวจสอบใบหน้าจากกล้อง IP"
-                : cameraSource === "local"
-                  ? "ระบบกำลังตรวจสอบใบหน้าจากกล้องเครื่อง"
-                  : "กำลังเชื่อมต่อกล้อง"}
-            </div>
-
-          </div>
-
-
-          {/* Canvas ใช้ capture ภาพ
-              แต่ไม่แสดงให้ผู้ใช้เห็น */}
-          <canvas
-            ref={canvasRef}
-            style={{
-              display: "none",
-            }}
-          />
-
-
-          <div className="status">
-
-            <div className="user-name">
-
-              {recognizedUser
-                ? recognizedUser.name
-                : claimedName ?? "Guest"}
-
-            </div>
-
-
-            <div className="user-role">
-
-              {recognizedUser
-                ? roleLabel(
-                    recognizedUser.role
-                  )
-                : "ผู้ใช้ทั่วไป"}
-
-            </div>
-
-
-            <div className="status-text">
-
-              {faceStatus}
-
-            </div>
-
-          </div>
-
-
-          <div
-            className={
-              listening
-                ? "microphone listening"
-                : "microphone"
-            }
-          >
-
-            {processing
-              ? "AI กำลังประมวลผล..."
-              : listening
-                ? "🎙 กำลังฟัง..."
-                : hasSession
-                  ? "🎤 กด Spacebar ค้างเพื่อพูด"
-                  : "กำลังรอการตรวจสอบใบหน้า"}
-
-          </div>
-
-        </div>
-
-
-        {/* ================================
-            RIGHT : CHAT
+            CHAT
         ================================= */}
 
         <div className="panel chat-panel">
 
           <div className="chat-title">
 
-            Conversation
+            บทสนทนา
 
           </div>
 
@@ -1606,6 +940,23 @@ export default function Home() {
               ref={messagesEndRef}
             />
 
+          </div>
+
+          <div
+            aria-live="polite"
+            className={
+              listening
+                ? "microphone listening"
+                : processing
+                  ? "microphone processing"
+                  : "microphone"
+            }
+          >
+            {processing
+              ? "AI กำลังประมวลผล..."
+              : listening
+                ? "🎙 กำลังฟัง..."
+                : "🎤 กด Spacebar ค้างเพื่อพูด"}
           </div>
 
         </div>
